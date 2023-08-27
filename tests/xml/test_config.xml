@@ -1,0 +1,9 @@
+<config>
+    <showname enable="1" />
+    <showage enable="1" />
+</config>
+
+<data>
+    <name>Isaac <!--ooh get split--> Quezada</name> <!-- Replace this with your name -->
+    <age>19</age> <!-- Replace this with your age -->
+</data>

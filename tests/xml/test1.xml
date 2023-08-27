@@ -1,0 +1,13 @@
+<db>
+    <table val1="123" val2="value">
+        <column rows="int;float;string">
+            <row>
+                <!-- hello there this is working -->
+                <int>7</int>
+                <!----><float>4.6</float>
+                <string>   hey yo   </string>
+                <db var="1" />
+            </row>
+        </column>
+    </table>
+</db>
