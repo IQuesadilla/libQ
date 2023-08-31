@@ -1,5 +1,5 @@
-#ifndef BASICXML_H
-#define BASICXML_H
+#ifndef LIBQ_XML_H
+#define LIBQ_XML_H
 #pragma once
 typedef unsigned long size_t;
 typedef unsigned int uint;

@@ -1,32 +1,31 @@
-CXX = g++
-CFLAGS = -std=c++17 -Wall -O3
-TESTFLAGS = -o $@ $^
+CXX = clang++
+CFLAGS = -std=c++17 -Wall -O3 -I include/
 OBJFLAGS = -o $@ -c $<
+SOFLAGS = -o $@ $^ -shared
 TARGET = libQ.so
-TESTS = tests/bin/log_test1 tests/bin/log_test_config tests/bin/xml_test1
+CLASSES = xml.o log.o cycle_timer.o
 
+.PHONY: all tests
 all: $(TARGET)
+tests:
+	$(MAKE) -C tests/
 
-tests: $(TESTS)
+libQ.so: $(CLASSES)
+	$(CXX) $(SOFLAGS) $(CFLAGS)
 
 # XML
-tests/bin/test1: tests/test1.cpp basicxml.o
-	$(CXX) $(TESTFLAGS) $(CFLAGS)
-
-tests/bin/test_config: tests/test_config.cpp basicxml.o
-	$(CXX) $(TESTFLAGS) $(CFLAGS)
-
-xml.o: basicxml.cpp basicxml.h
+xml.o: src/xml.cpp include/xml.h
 	$(CXX) $(OBJFLAGS) $(CFLAGS)
-
 
 # Log
-tests/bin/test1: tests/test1.cpp logcpp.o
-	$(CXX) $(TESTFLAGS) $(CFLAGS)
-
-log.o: logcpp.cpp logcpp.h
+log.o: src/log.cpp include/log.h include/colorcodes.h
 	$(CXX) $(OBJFLAGS) $(CFLAGS)
 
+# Cycle Timer
+cycle_timer.o: src/cycle_timer.cpp include/cycle_timer.h
+	$(CXX) $(OBJFLAGS) $(CFLAGS)
+
+.PHONY: clean
 clean:
-	-rm *.o
-	-rm tests/bin/*
+	-rm *.o $(TARGET)
+	-$(MAKE) clean -C tests/

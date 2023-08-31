@@ -1,4 +1,4 @@
-#include "logcpp.h"
+#include "log.h"
 #include <iostream>
 #include "colorcodes.h"
 
