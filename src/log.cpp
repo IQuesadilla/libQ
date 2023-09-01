@@ -2,19 +2,35 @@
 #include <iostream>
 #include "colorcodes.h"
 
-logcpp::logcpp(vlevel verbosity)
+namespace libQ {
+
+log::log(vlevel verbosity)
 {
     tabs = 0;
     _verbosity = verbosity;
     start = std::chrono::system_clock::now();
+    output_lock.reset(new std::mutex());
 }
 
-logcpp::~logcpp()
+log::log(log* copy)
+{
+    tabs = copy->tabs;
+    _verbosity = copy->_verbosity;
+    start = copy->start;
+    output_lock = copy->output_lock;
+}
+
+log::~log()
 {
     ;
 }
 
-void logcpp::flush(loglevel lev, const char *output)
+void log::setPrefix(std::string prefix)
+{
+    _prefix = prefix;
+}
+
+void log::flush(loglevel lev, const char *output)
 {
     switch (_verbosity)
     {
@@ -39,7 +55,7 @@ void logcpp::flush(loglevel lev, const char *output)
                     ( std::chrono::system_clock::now() - start).count() );
 
 
-    templogstream << '[' << std::string(12-ms.length(),'0') << ms << "] " << indent();
+    templogstream << '[' << std::string(12-ms.length(),'0') << ms << "] " << _prefix << ' ' << indent();
 
     switch (lev)
     {
@@ -68,26 +84,29 @@ void logcpp::flush(loglevel lev, const char *output)
 
     templogstream << output << RESET << std::endl;
 
-    output_lock.lock();
+    output_lock->lock();
     std::cout << templogstream.str();
-    output_lock.unlock();
+    output_lock->unlock();
 }
 
-lifetimelogcpp logcpp::function(const char *name)
+lifetimelog log::function(const char *name, bool disable_output)
 {
-    std::stringstream templogstream;
-    templogstream << "(" << name << ")";
-    flush(loglevel::FUNCTION,templogstream.str().c_str());
+    if ( !disable_output )
+    {
+        std::stringstream templogstream;
+        templogstream << "(" << name << ")";
+        flush(loglevel::FUNCTION,templogstream.str().c_str());
+    }
     ++tabs;
-    return lifetimelogcpp(this);
+    return lifetimelog(this);
 }
 
-void logcpp::endfunc()
+void log::endfunc()
 {
     --tabs;
 }
 
-std::string logcpp::indent()
+std::string log::indent()
 {   
     if (_verbosity == DEBUG)
     {
@@ -102,25 +121,25 @@ std::string logcpp::indent()
         return "";
 }
 
-lifetimelogcpp & operator<<(lifetimelogcpp &buff, const char *output)
+lifetimelog & operator<<(lifetimelog &buff, const char *output)
 {
-    buff.log(output);
+    buff._log(output);
     return buff;
 }
 
-lifetimelogcpp & operator<<(lifetimelogcpp &buff, const std::string output)
+lifetimelog & operator<<(lifetimelog &buff, const std::string output)
 {
-    buff.log(output.c_str());
+    buff._log(output.c_str());
     return buff;
 }
 
-lifetimelogcpp & operator<<(lifetimelogcpp &buff, const int output)
+lifetimelog & operator<<(lifetimelog &buff, const int output)
 {
-    buff.log(std::to_string(output).c_str());
+    buff._log(std::to_string(output).c_str());
     return buff;
 }
 
-lifetimelogcpp & operator<<(lifetimelogcpp &buff, logcpp::loglevel lev)
+lifetimelog & operator<<(lifetimelog &buff, libQ::loglevel lev)
 {
     buff.logobj->flush(lev,buff.logstream.str().c_str());
 
@@ -130,7 +149,9 @@ lifetimelogcpp & operator<<(lifetimelogcpp &buff, logcpp::loglevel lev)
     return buff;
 }
 
-void lifetimelogcpp::log(const char *output)
+void lifetimelog::_log(const char *output)
 {
     logstream << output;
+}
+
 }
