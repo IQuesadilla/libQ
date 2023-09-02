@@ -25,7 +25,10 @@ log.o: src/log.cpp include/log.h include/colorcodes.h
 cycle_timer.o: src/cycle_timer.cpp include/cycle_timer.h
 	$(CXX) $(OBJFLAGS) $(CFLAGS)
 
-.PHONY: clean
+.PHONY: clean install
 clean:
 	-rm *.o $(TARGET)
 	-$(MAKE) clean -C tests/
+
+install: libQ.so
+	-cp libQ.so /usr/local/lib
