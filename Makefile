@@ -3,7 +3,7 @@ CFLAGS = -std=c++17 -Wall -O3 -I include/
 OBJFLAGS = -o $@ -c $< -fPIC
 SOFLAGS = -o $@ $^ -shared
 TARGET = lib/libQ.so
-CLASSES = xml.o log.o cycle_timer.o event_timer.o
+CLASSES = lib/xml.o lib/log.o lib/cycle_timer.o lib/event_timer.o
 
 BUILDABLETYPES = %. %.cpp %.s %.o %.a
 TESTFLAGS = -o $@ $(filter $(BUILDABLETYPES),$^)
@@ -60,7 +60,7 @@ tests/bin/event_timer_test1: tests/event_timer/test1.cpp lib/event_timer.o
 #------Clean------
 .PHONY: clean
 clean:
-	-rm *.o $(TARGET) tests/bin/*
+	-rm lib/* tests/bin/*
 	-$(MAKE) clean -C tests/
 
 #------Install------
