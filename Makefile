@@ -2,7 +2,7 @@ CXX = clang++
 CFLAGS = -std=c++17 -Wall -O3 -I include/
 OBJFLAGS = -o $@ -c $< -fPIC
 SOFLAGS = -o $@ $^ -shared
-TARGET = libQ.so
+TARGET = lib/libQ.so
 CLASSES = xml.o log.o cycle_timer.o event_timer.o
 
 BUILDABLETYPES = %. %.cpp %.s %.o %.a
