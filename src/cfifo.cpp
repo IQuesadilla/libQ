@@ -56,3 +56,19 @@ bool cfifo::getch(char *byte)
     ++_read_pos;
     return true;
 }
+
+bool cfifo::pop()
+{
+    if (_write_pos == _read_pos && !_writeIsAhead)
+    {
+        return false;
+    }
+
+    if (_write_pos == 0)
+    {
+        _write_pos = _bufflen;
+    }
+
+    --_write_pos;
+    return true;
+}

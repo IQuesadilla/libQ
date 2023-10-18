@@ -1,13 +1,7 @@
 #ifndef CFIFO_H
 #define CFIFO_H
 
-//typedef unsigned int uint;
-
-#ifndef uint
-#define uint unsigned int
-#endif
-
-// TODO: Add pop() to remove last byte in write buffer, to support backspace
+#include "libQ.h"
 
 // This class is NOT atomic - write and read should not occur simultaneously
 // Write performs a copy, read does not. Might be easier to tho.
@@ -23,6 +17,8 @@ public:
 
     bool putch(const char *byte);
     bool getch(char *byte);
+
+    bool pop();
 
 private:
     char *_buffer;

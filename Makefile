@@ -1,11 +1,12 @@
 CXX = clang++
-CFLAGS = -std=c++17 -Wall -O3 -I include/
+CFLAGS = -std=c++17 -Wall -Os -I include/
 OBJFLAGS = -o $@ -c $< -fPIC
 SOFLAGS = -o $@ $^ -shared
 TARGET = lib/libQ.so
-CLASSES = lib/xml.o lib/log.o lib/cycle_timer.o lib/event_timer.o
+CLASSES = lib/xml.o lib/log.o lib/cycle_timer.o lib/event_timer.o lib/cfifo.o
+BUILDBARE = -nostdlib
 
-BUILDABLETYPES = %. %.cpp %.s %.o %.a
+BUILDABLETYPES = %. %.cpp %.s %.S %.o %.a
 TESTFLAGS = -o $@ $(filter $(BUILDABLETYPES),$^)
 CPDATA = cp $(filter-out $(BUILDABLETYPES),$^) $(dir $@)
 
@@ -30,14 +31,22 @@ lib/log.o: src/log.cpp include/log.h include/colorcodes.h
 lib/cycle_timer.o: src/cycle_timer.cpp include/cycle_timer.h
 	$(CXX) $(OBJFLAGS) $(CFLAGS)
 
-#Event Timer
+# Event Timer
 lib/event_timer.o: src/event_timer.cpp include/event_timer.h
 	$(CXX) $(OBJFLAGS) $(CFLAGS)
+
+# CFIFO
+lib/cfifo.o: src/cfifo.cpp include/cfifo.h lib/libQ.o
+	$(CXX) $(OBJFLAGS) $(CFLAGS) $(BUILDBARE)
+
+# General Library
+lib/libQ.o: src/libQ.cpp include/libQ.h
+	$(CXX) $(OBJFLAGS) $(CFLAGS) $(BUILDBARE)
 
 
 #------Tests------
 .PHONY: tests
-tests: tests/bin/event_timer_test1 #bin/log_test1 bin/xml_test1 bin/xml_test_config
+tests: tests/bin/event_timer_test1 tests/bin/cfifo_test_1 #bin/log_test1 bin/xml_test1 bin/xml_test_config
 
 # XML
 tests/bin/xml_test1: tests/xml/test1.cpp lib/xml.o tests/xml/test1.xml
@@ -54,6 +63,10 @@ tests/bin/log_test1: tests/log/test1.cpp lib/log.o
 
 # Event Timer
 tests/bin/event_timer_test1: tests/event_timer/test1.cpp lib/event_timer.o
+	$(CXX) $(TESTFLAGS) $(CFLAGS)
+
+# CFIFO
+tests/bin/cfifo_test_1: tests/cfifo/test1.cpp lib/cfifo.o
 	$(CXX) $(TESTFLAGS) $(CFLAGS)
 
 
