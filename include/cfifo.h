@@ -3,6 +3,12 @@
 
 //typedef unsigned int uint;
 
+#ifndef uint
+#define uint unsigned int
+#endif
+
+// TODO: Add pop() to remove last byte in write buffer, to support backspace
+
 // This class is NOT atomic - write and read should not occur simultaneously
 // Write performs a copy, read does not. Might be easier to tho.
 //   Unfortunately, this would mean dual-copy, which is unfortunate
