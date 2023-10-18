@@ -1,7 +1,7 @@
 #ifndef CFIFO_H
 #define CFIFO_H
 
-typedef unsigned int uint;
+//typedef unsigned int uint;
 
 // This class is NOT atomic - write and read should not occur simultaneously
 // Write performs a copy, read does not. Might be easier to tho.
