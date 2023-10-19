@@ -12,7 +12,7 @@
 
 #ifdef __cplusplus
 #define EXTERNAL extern "C"
-#elif
+#else
 #define EXTERNAL
 #endif
 
@@ -21,7 +21,7 @@
 #define resetBits(base,mask) ((base) &= ~mask)
 #define EnableInterrupts() ({__asm__ volatile("sei");})
 #define DisableInterrupts() ({__asm__ volatile("cli");})
-#define LPM(ptr, result) (asm("lpm %0, Z" : "=r" (result) : "z" (ptr)))
+#define LPM(ptr, result) ({asm("lpm %0, Z" : "=r" (result) : "z" (ptr));})
 
 #ifdef __AVR_ATmega328P__
 #include "m328p_defines.h"
