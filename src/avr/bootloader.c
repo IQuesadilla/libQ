@@ -1,4 +1,4 @@
-#include "generic.h"
+#include "avr/generic.h"
 
 extern int __bss_start;
 extern int __bss_end;
