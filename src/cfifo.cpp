@@ -21,7 +21,7 @@ uint cfifo::read(char *data, uint length)
     return 0;
 }
 
-bool cfifo::putch(const char *byte)
+bool cfifo::putch(const char byte)
 {
     if (_write_pos == _bufflen)
     {
@@ -34,7 +34,7 @@ bool cfifo::putch(const char *byte)
         return false;
     }
 
-    _buffer[_write_pos] = *byte;
+    _buffer[_write_pos] = byte;
     ++_write_pos;
     return true;
 }

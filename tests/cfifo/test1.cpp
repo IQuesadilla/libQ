@@ -11,7 +11,7 @@ int main()
     int length = strlen(mystring);
     for (int i = 0; i < length;)
     {
-        while ( myfifo.putch(&mystring[i]) && i < length ) ++i;
+        while ( myfifo.putch(mystring[i]) && i < length ) ++i;
 
         char temp;
         while ( myfifo.getch(&temp) )
