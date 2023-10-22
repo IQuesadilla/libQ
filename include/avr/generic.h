@@ -17,8 +17,8 @@
 #endif
 
 #define nop() ({__asm__ volatile("nop");})
-#define setBits(base,mask) ((base) |= mask)
-#define resetBits(base,mask) ((base) &= ~mask)
+#define setBits(base,mask) ((base) |= (mask))
+#define resetBits(base,mask) ((base) &= ~(mask))
 #define EnableInterrupts() ({__asm__ volatile("sei");})
 #define DisableInterrupts() ({__asm__ volatile("cli");})
 #define LPM(ptr, result) ({asm("lpm %0, Z" : "=r" (result) : "z" (ptr));})
