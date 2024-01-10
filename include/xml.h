@@ -23,6 +23,7 @@ struct element
 
     bool isClosing;
     bool isStandalone;
+    bool isFirst;
 
     attribute *atts;
 };
@@ -35,7 +36,7 @@ public:
 
     int parse();
 
-    size_t buffersize = 10;
+    size_t buffersize;
 
 private:
     struct
@@ -47,6 +48,7 @@ private:
         bool isLoadingVal : 1;
         bool doCallback : 1;
         bool isComment : 1;
+        bool LastCharWasSlash : 1;
         uint findingComment : 2;
     } flags;
 
@@ -55,7 +57,7 @@ private:
 
     void parse_attributes(attribute *a, char *attstring, size_t length, element e);
 
-    void run_parsecallback(element e, char *attstring, size_t attslen);
+    void run_parsecallback(element *e, char *attstring, size_t attslen);
     bool whitespace(char c);
 };
 

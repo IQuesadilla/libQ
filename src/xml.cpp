@@ -2,20 +2,19 @@
 
 #include <iostream>
 
-#undef __cxa_pure_virtual
-extern "C" void __cxa_pure_virtual()
-{
-    while(1);
-}
 
 basicxml::basicxml()
 {
-    ;
+    buffersize = 20;
 }
+
+void yayaya() {}
 
 int basicxml::parse()
 {
-    char strbuff[300];
+    size_t strbuffsize = 300;
+    char strbuff[strbuffsize];
+    // Would cause issues is attributes were too long
     element e;
     char *attstring = nullptr;
     int attslen = 0;
@@ -23,10 +22,11 @@ int basicxml::parse()
     flags.isInsideBrackets = false;
     flags.lastIteration = false;
     flags.doCallback = false;
+    flags.LastCharWasSlash = false;
     flags.findingComment = 0;
     flags.isComment = 0;
 
-    size_t strbuffit = 0;
+    size_t strbuffit = 0, LastWhitespace = 0;
     while (!flags.lastIteration)
     {
         char buffer[buffersize];
@@ -47,30 +47,35 @@ int basicxml::parse()
                         e.atts = nullptr;
                     }
 
+                    if (flags.LastCharWasSlash)
+                    {
+                        e.isClosing = false;
+                        e.isStandalone = true;
+                    }
+
                     flags.isLoadingName = false;
                     flags.isLoadingAtts = false;
                     flags.isInsideBrackets = false;
                 }
 
-                else if (*c == '/')
+                else if (*c == '/' || *c == '?')
                 {
                     if ( flags.isLoadingName )
                     {
                         e.isClosing = true;
                     }
-                    else
-                    {
-                        e.isStandalone = true;
-                    }
+                    flags.LastCharWasSlash = true;
                 }
 
                 else if ( whitespace(*c) && flags.isLoadingName )
                 {
                     flags.isLoadingName = false;
+                    flags.LastCharWasSlash = false;
                 }
 
                 else
                 {
+                    flags.LastCharWasSlash = false;
                     if ( !flags.isLoadingName && !flags.isLoadingAtts )
                     {
                         strbuff[strbuffit++] = '\0';
@@ -86,7 +91,7 @@ int basicxml::parse()
                         ++attslen;
                 }
             }
-            else
+            else // !flags.isInsideBrackets
             {
                 if ( !flags.isComment )
                 {
@@ -121,7 +126,7 @@ int basicxml::parse()
                                 
                                 strbuff[strbuffit] = '\0';
 
-                                run_parsecallback(e,attstring,attslen);
+                                run_parsecallback(&e,attstring,attslen);
                             }
 
                             flags.isInsideBrackets = true;
@@ -136,15 +141,41 @@ int basicxml::parse()
                             e.valuelen = 0;
                             e.isClosing = false;
                             e.isStandalone = false;
+                            e.isFirst = true;
                             strbuffit = 0;
                             attstring = nullptr;
                             attslen = 0;
+                            LastWhitespace = 0;
                             flags.findingComment = 0;
                             --c;
                         }
                     }
                     else if ( !whitespace(*c) )
                     {
+                        if (strbuffit > strbuffsize - 2)
+                        {
+                            size_t distance = strbuffit - LastWhitespace;
+                            if (distance < 10) e.valuelen -= distance;
+                            else distance = 0;
+
+                            char prevchar = strbuff[strbuffit-distance];
+                            strbuff[strbuffit-distance] = '\0';
+                            run_parsecallback(&e,attstring,attslen);
+
+                            strbuffit = e.namelen+1;
+                            e.value = &strbuff[strbuffit];
+
+                            strbuff[strbuffit++] = prevchar;
+                            for (size_t it = 1; it < distance; it++)
+                                strbuff[strbuffit++] = strbuff[LastWhitespace + it];
+
+                            e.valuelen = distance;
+                            e.atts = nullptr;
+                            attstring = nullptr;
+                            attslen = 0;
+                            LastWhitespace = 0;
+                        }
+
                         if (e.value == nullptr)
                         {
                             if (e.atts == nullptr)
@@ -157,6 +188,7 @@ int basicxml::parse()
                             if (flags.isLoadingVal == false)
                             {
                                 strbuff[strbuffit++] = ' ';
+                                LastWhitespace = strbuffit;
                                 ++e.valuelen;
                             }
                         }
@@ -173,7 +205,7 @@ int basicxml::parse()
                     }
                 }
 
-                else if ( flags.isComment )
+                else // flags.isComment
                 {
                     if ( *c == '-' && flags.findingComment == 3 )
                     {
@@ -197,7 +229,9 @@ int basicxml::parse()
     
     strbuff[strbuffit] = '\0';
     e.valuelen = 0;
-    run_parsecallback(e,attstring,attslen);
+    run_parsecallback(&e,attstring,attslen);
+
+    yayaya();
 
     return 0;
 }
@@ -267,22 +301,23 @@ void basicxml::parse_attributes(attribute *a, char *attstring, size_t length, el
     parse_attributes(&newa,&attstring[i],length - i, e);
 }
 
-void basicxml::run_parsecallback(element e, char *attstring, size_t attslen)
+void basicxml::run_parsecallback(element *e, char *attstring, size_t attslen)
 {
     char null = '\0';
-    if (e.valuelen == 0)
+    if (e->valuelen == 0)
     {
-        e.value = &null;
+        e->value = &null;
     }
 
     if ( attstring == nullptr )
     {
-        parsecallback(e);
+        parsecallback(*e);
     }
     else
     {
-        parse_attributes(nullptr,attstring,attslen,e);
+        parse_attributes(nullptr,attstring,attslen,*e);
     }
+    e->isFirst = false;
 }
 
 bool basicxml::whitespace(char c)
