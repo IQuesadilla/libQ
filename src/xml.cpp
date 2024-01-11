@@ -13,7 +13,7 @@ void yayaya() {}
 int basicxml::parse()
 {
     int strbuffsize = 300;
-    char strbuff[strbuffsize];
+    char strbuff[300];
     // Would cause issues is attributes were too long
     element e;
     char *attstring = nullptr;
@@ -29,7 +29,7 @@ int basicxml::parse()
     int strbuffit = 0, LastWhitespace = 0;
     while (!flags.lastIteration)
     {
-        char buffer[buffersize];
+        char buffer[20];
         int size = loadcallback(buffer,buffersize);
         if (size < buffersize)
         {

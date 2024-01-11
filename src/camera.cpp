@@ -30,9 +30,9 @@ glm::mat4 Camera::GetRotViewMatrix()
     return glm::lookAt(glm::normalize(-Front), glm::vec3(0.0f), WorldUp);
 }
 
-glm::mat4 Camera::GetProjectionMatrix(float near, float far)
+glm::mat4 Camera::GetProjectionMatrix(float NearDepth, float FarDepth)
 {
-	return glm::perspective(glm::radians(Zoom), viewsizex / viewsizey, near, far);
+	return glm::perspective(glm::radians(Zoom), viewsizex / viewsizey, NearDepth, FarDepth);
 }
 
 void Camera::setViewSize(int x, int y)

@@ -78,7 +78,7 @@ public:
 
     glm::mat4 GetViewMatrix();
     glm::mat4 GetRotViewMatrix();
-	glm::mat4 GetProjectionMatrix(float near = 0.1f, float far = 1000.0f);
+	glm::mat4 GetProjectionMatrix(float NearDepth = 0.1f, float FarDepth = 1000.0f);
 
     void setViewSize(int x, int y);
 

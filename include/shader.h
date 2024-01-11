@@ -10,6 +10,7 @@
 #include <iostream>
 #include <vector>
 
+#include "glad/glad.h"
 #if defined __has_include
     #if __has_include (<SDL_opengl.h>)
         #include <SDL_opengl.h>
