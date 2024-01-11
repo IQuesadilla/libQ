@@ -1,15 +1,15 @@
 #ifndef LIBQ_XML_H
 #define LIBQ_XML_H
 #pragma once
-typedef unsigned long size_t;
-typedef unsigned int uint;
+//typedef unsigned long int;
+//typedef unsigned int uint;
 
 struct attribute
 {
     char *name;
-    size_t namelen;
+    int namelen;
     char *value;
-    size_t valuelen;
+    int valuelen;
 
     attribute *next;
 };
@@ -17,9 +17,9 @@ struct attribute
 struct element
 {
     char *name;
-    size_t namelen;
+    int namelen;
     char *value;
-    size_t valuelen;
+    int valuelen;
 
     bool isClosing;
     bool isStandalone;
@@ -36,7 +36,7 @@ public:
 
     int parse();
 
-    size_t buffersize;
+    int buffersize;
 
 private:
     struct
@@ -49,15 +49,15 @@ private:
         bool doCallback : 1;
         bool isComment : 1;
         bool LastCharWasSlash : 1;
-        uint findingComment : 2;
+        unsigned int findingComment : 2;
     } flags;
 
-    virtual int loadcallback(char *, size_t) = 0;
+    virtual int loadcallback(char *, int) = 0;
     virtual void parsecallback(element) = 0;
 
-    void parse_attributes(attribute *a, char *attstring, size_t length, element e);
+    void parse_attributes(attribute *a, char *attstring, int length, element e);
 
-    void run_parsecallback(element *e, char *attstring, size_t attslen);
+    void run_parsecallback(element *e, char *attstring, int attslen);
     bool whitespace(char c);
 };
 

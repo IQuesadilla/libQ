@@ -62,8 +62,8 @@ private:
 
     std::string loadedShaderFunctions;
 
-	uint programID;
-    bool run;
+	GLuint programID;
+    //bool run;
 };
 
 #endif

@@ -12,7 +12,7 @@ void yayaya() {}
 
 int basicxml::parse()
 {
-    size_t strbuffsize = 300;
+    int strbuffsize = 300;
     char strbuff[strbuffsize];
     // Would cause issues is attributes were too long
     element e;
@@ -26,11 +26,11 @@ int basicxml::parse()
     flags.findingComment = 0;
     flags.isComment = 0;
 
-    size_t strbuffit = 0, LastWhitespace = 0;
+    int strbuffit = 0, LastWhitespace = 0;
     while (!flags.lastIteration)
     {
         char buffer[buffersize];
-        size_t size = loadcallback(buffer,buffersize);
+        int size = loadcallback(buffer,buffersize);
         if (size < buffersize)
         {
             flags.lastIteration = true;
@@ -154,7 +154,7 @@ int basicxml::parse()
                     {
                         if (strbuffit > strbuffsize - 2)
                         {
-                            size_t distance = strbuffit - LastWhitespace;
+                            int distance = strbuffit - LastWhitespace;
                             if (distance < 10) e.valuelen -= distance;
                             else distance = 0;
 
@@ -166,7 +166,7 @@ int basicxml::parse()
                             e.value = &strbuff[strbuffit];
 
                             strbuff[strbuffit++] = prevchar;
-                            for (size_t it = 1; it < distance; it++)
+                            for (int it = 1; it < distance; it++)
                                 strbuff[strbuffit++] = strbuff[LastWhitespace + it];
 
                             e.valuelen = distance;
@@ -236,9 +236,9 @@ int basicxml::parse()
     return 0;
 }
 
-void basicxml::parse_attributes(attribute *a, char *attstring, size_t length, element e)
+void basicxml::parse_attributes(attribute *a, char *attstring, int length, element e)
 {
-    size_t i = 0;
+    int i = 0;
     attribute newa;
     bool lastit = true;
 
@@ -301,7 +301,7 @@ void basicxml::parse_attributes(attribute *a, char *attstring, size_t length, el
     parse_attributes(&newa,&attstring[i],length - i, e);
 }
 
-void basicxml::run_parsecallback(element *e, char *attstring, size_t attslen)
+void basicxml::run_parsecallback(element *e, char *attstring, int attslen)
 {
     char null = '\0';
     if (e->valuelen == 0)
