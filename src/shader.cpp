@@ -13,6 +13,7 @@ _shader::_shader(std::string vertex, std::string fragment)
     _shader();
 
     load(vertex, fragment);
+    compile();//VertexSource, FragmentSource);
 }
 
 _shader::~_shader()
@@ -22,15 +23,9 @@ _shader::~_shader()
 
 bool _shader::load(std::string vertex, std::string fragment)
 {
-    std::string vertexsource = readFile(vertex);
-    std::string fragmentsource = readFile(fragment);
-
-    bool error = compile(vertexsource, fragmentsource);
-    if (error)
-    {
-        errorlog << "Failed to load V:" << vertex << " and F:" << fragment << std::endl;
-    }
-    return error;
+    VertexSource = readFile(vertex);
+    FragmentSource = readFile(fragment);
+    return true;
 }
 /*
 bool _shader::generate(tinyobj::material_t material, std::vector<std::string> layout)
@@ -169,15 +164,17 @@ std::string _shader::readFile(std::string path)
     return data;
 }
 
-bool _shader::compile(std::string vertexsource, std::string fragmentsource)
+bool _shader::compile()
 {
     bool error = false;
 
-    auto loc = vertexsource.find("void main");
-    vertexsource.insert(loc, '\n' + loadedShaderFunctions + '\n');
+    //vertexsource = VertexSource; fragmentsource = FragmentSource;
 
-    const char *vertexdata = vertexsource.c_str();
-    const char *fragmentdata = fragmentsource.c_str();
+    auto loc = VertexSource.find("void main");
+    VertexSource.insert(loc, '\n' + loadedShaderFunctions + '\n');
+
+    const char *vertexdata = VertexSource.c_str();
+    const char *fragmentdata = FragmentSource.c_str();
 
     GLuint vshader = glCreateShader (GL_VERTEX_SHADER);
 	glShaderSource (vshader, 1, &vertexdata, NULL);
@@ -201,7 +198,10 @@ bool _shader::compile(std::string vertexsource, std::string fragmentsource)
     glDeleteShader (vshader);
 	glDeleteShader (fshader);
 
-    return error;
+  VertexSource = "";
+  FragmentSource = "";
+
+    return !error;
 }
 
 bool _shader::checkCompileErrors(GLuint shader, std::string type)

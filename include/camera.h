@@ -70,6 +70,7 @@ public:
     bool UpIsWorldUp;
 
     Camera_Movement direction;
+    glm::mat4 ProjectionMatrix;
 
     float viewsizex, viewsizey;
 
@@ -78,7 +79,7 @@ public:
 
     glm::mat4 GetViewMatrix();
     glm::mat4 GetRotViewMatrix();
-	glm::mat4 GetProjectionMatrix(float NearDepth = 0.1f, float FarDepth = 1000.0f);
+	  void BuildProjectionMatrix(float NearDepth = 0.1f, float FarDepth = 1000.0f);
 
     void setViewSize(int x, int y);
 

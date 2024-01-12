@@ -5,13 +5,14 @@
 
 basicxml::basicxml()
 {
-    buffersize = 20;
+    //buffersize = 20;
 }
 
 void yayaya() {}
 
 int basicxml::parse()
 {
+    buffersize = 20;
     int strbuffsize = 300;
     char strbuff[300];
     // Would cause issues is attributes were too long
