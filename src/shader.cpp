@@ -166,42 +166,47 @@ std::string _shader::readFile(std::string path)
 
 bool _shader::compile()
 {
-    bool error = false;
+  bool error = false;
 
-    //vertexsource = VertexSource; fragmentsource = FragmentSource;
+  //vertexsource = VertexSource; fragmentsource = FragmentSource;
+  if (VertexSource.length() == 0 || FragmentSource.length() == 0)
+  {
+    std::cout << "Tried compiling an empty shader" << std::endl;
+    return false;
+  }
 
-    auto loc = VertexSource.find("void main");
-    VertexSource.insert(loc, '\n' + loadedShaderFunctions + '\n');
+  auto loc = VertexSource.find("void main");
+  VertexSource.insert(loc, '\n' + loadedShaderFunctions + '\n');
 
-    const char *vertexdata = VertexSource.c_str();
-    const char *fragmentdata = FragmentSource.c_str();
+  const char *vertexdata = VertexSource.c_str();
+  const char *fragmentdata = FragmentSource.c_str();
 
-    GLuint vshader = glCreateShader (GL_VERTEX_SHADER);
+  GLuint vshader = glCreateShader (GL_VERTEX_SHADER);
 	glShaderSource (vshader, 1, &vertexdata, NULL);
 	glCompileShader (vshader);
-    error |= checkCompileErrors(vshader,"VERTEX");
+  error |= checkCompileErrors(vshader,"VERTEX");
 
 	GLuint fshader = glCreateShader (GL_FRAGMENT_SHADER);
 	glShaderSource (fshader, 1, &fragmentdata, NULL);
 	glCompileShader (fshader);
-    error |= checkCompileErrors(fshader,"FRAGMENT");
+  error |= checkCompileErrors(fshader,"FRAGMENT");
 
-    if ( !error )
-    {
-        programID = glCreateProgram ();
-        glAttachShader (programID, vshader);
-        glAttachShader (programID, fshader);
-        glLinkProgram (programID);
-        error = checkCompileErrors(programID,"PROGRAM");
-    }
+  if ( !error )
+  {
+    programID = glCreateProgram ();
+    glAttachShader (programID, vshader);
+    glAttachShader (programID, fshader);
+    glLinkProgram (programID);
+    error = checkCompileErrors(programID,"PROGRAM");
+  }
 
-    glDeleteShader (vshader);
+  glDeleteShader (vshader);
 	glDeleteShader (fshader);
 
   VertexSource = "";
   FragmentSource = "";
 
-    return !error;
+  return !error;
 }
 
 bool _shader::checkCompileErrors(GLuint shader, std::string type)
