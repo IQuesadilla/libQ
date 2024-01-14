@@ -156,7 +156,7 @@ int basicxml::parse()
                         if (strbuffit > strbuffsize - 2)
                         {
                             int distance = strbuffit - LastWhitespace;
-                            if (distance < 10) e.valuelen -= distance;
+                            if (distance < 20) e.valuelen -= distance;
                             else distance = 0;
 
                             char prevchar = strbuff[strbuffit-distance];
