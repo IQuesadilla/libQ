@@ -5,4 +5,6 @@
 typedef unsigned int uint;
 #endif
 
+uint strlen(const char *str);
+
 #endif

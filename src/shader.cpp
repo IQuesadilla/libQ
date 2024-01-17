@@ -10,6 +10,7 @@ _shader::_shader(std::string vertex, std::string fragment)
     _shader();
 
     load(vertex, fragment);
+    compile();//VertexSource, FragmentSource);
 }
 
 _shader::~_shader()
@@ -19,15 +20,9 @@ _shader::~_shader()
 
 bool _shader::load(std::string vertex, std::string fragment)
 {
-    std::string vertexsource = readFile(vertex);
-    std::string fragmentsource = readFile(fragment);
-
-    bool error = compile(vertexsource, fragmentsource);
-    if (error)
-    {
-        errorlog << "Failed to load V:" << vertex << " and F:" << fragment << std::endl;
-    }
-    return error;
+    VertexSource = readFile(vertex);
+    FragmentSource = readFile(fragment);
+    return true;
 }
 /*
 bool _shader::generate(tinyobj::material_t material, std::vector<std::string> layout)
@@ -166,39 +161,49 @@ std::string _shader::readFile(std::string path)
     return data;
 }
 
-bool _shader::compile(std::string vertexsource, std::string fragmentsource)
+bool _shader::compile()
 {
-    bool error = false;
+  bool error = false;
 
-    auto loc = vertexsource.find("void main");
-    vertexsource.insert(loc, '\n' + loadedShaderFunctions + '\n');
+  //vertexsource = VertexSource; fragmentsource = FragmentSource;
+  if (VertexSource.length() == 0 || FragmentSource.length() == 0)
+  {
+    std::cout << "Tried compiling an empty shader" << std::endl;
+    return false;
+  }
 
-    const char *vertexdata = vertexsource.c_str();
-    const char *fragmentdata = fragmentsource.c_str();
+  auto loc = VertexSource.find("void main");
+  VertexSource.insert(loc, '\n' + loadedShaderFunctions + '\n');
 
-    GLuint vshader = glCreateShader (GL_VERTEX_SHADER);
+  const char *vertexdata = VertexSource.c_str();
+  const char *fragmentdata = FragmentSource.c_str();
+
+  GLuint vshader = glCreateShader (GL_VERTEX_SHADER);
 	glShaderSource (vshader, 1, &vertexdata, NULL);
 	glCompileShader (vshader);
-    error |= checkCompileErrors(vshader,"VERTEX");
+  error |= checkCompileErrors(vshader,"VERTEX");
 
 	GLuint fshader = glCreateShader (GL_FRAGMENT_SHADER);
 	glShaderSource (fshader, 1, &fragmentdata, NULL);
 	glCompileShader (fshader);
-    error |= checkCompileErrors(fshader,"FRAGMENT");
+  error |= checkCompileErrors(fshader,"FRAGMENT");
 
-    if ( !error )
-    {
-        programID = glCreateProgram ();
-        glAttachShader (programID, vshader);
-        glAttachShader (programID, fshader);
-        glLinkProgram (programID);
-        error = checkCompileErrors(programID,"PROGRAM");
-    }
+  if ( !error )
+  {
+    programID = glCreateProgram ();
+    glAttachShader (programID, vshader);
+    glAttachShader (programID, fshader);
+    glLinkProgram (programID);
+    error = checkCompileErrors(programID,"PROGRAM");
+  }
 
-    glDeleteShader (vshader);
+  glDeleteShader (vshader);
 	glDeleteShader (fshader);
 
-    return error;
+  VertexSource = "";
+  FragmentSource = "";
+
+  return !error;
 }
 
 bool _shader::checkCompileErrors(GLuint shader, std::string type)

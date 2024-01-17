@@ -45,19 +45,20 @@ public:
     void setMat3(const std::string &name, const glm::mat3 &mat) const;
     void setMat4(const std::string &name, const glm::mat4 &mat) const;
 
-private:
+//private:
     std::string readFile(std::string path);
-    bool compile(std::string vertexsource, std::string fragmentsource);
+    bool compile();
     bool checkCompileErrors(GLuint shader, std::string type);
 
 	//Json::Value shadervalues;
 
     std::stringstream errorlog;
+    std::string VertexSource, FragmentSource;
 
     std::string loadedShaderFunctions;
 
-	uint programID;
-    bool run;
+	GLuint programID;
+    //bool run;
 };
 
 #endif

@@ -15,7 +15,7 @@ public:
     uint write(const char *data, uint length);
     uint read(char *data, uint length);
 
-    bool putch(const char *byte);
+    bool putch(const char byte);
     bool getch(char *byte);
 
     bool pop();
