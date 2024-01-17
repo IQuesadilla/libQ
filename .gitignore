@@ -1,2 +1,6 @@
+vcpkg/
+build/
+.cache/
+.vscode/
 *.o
 *.so

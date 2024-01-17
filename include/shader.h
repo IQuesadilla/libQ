@@ -2,21 +2,15 @@
 #ifndef SHADER_H
 #define SHADER_H
 
-#include <string>
-
+#include <glad.h>
 #include "glm.hpp"
+
 #include <fstream>
 #include <sstream>
 #include <iostream>
 #include <vector>
-
-#if defined __has_include
-    #if __has_include (<SDL_opengl.h>)
-        #include <SDL_opengl.h>
-    #else
-        #include <GL/gl.h>
-    #endif
-#endif
+#include <string>
+#include <algorithm>
 
 class _shader
 {

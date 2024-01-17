@@ -1,15 +1,8 @@
 #pragma once
 
+#include "glad.h"
 #include "glm.hpp"
 #include "gtc/matrix_transform.hpp"
-
-#if defined __has_include
-    #if __has_include (<SDL_opengl.h>)
-        #include <SDL_opengl.h>
-    #else
-        #include <GL/gl.h>
-    #endif
-#endif
 
 // Defines several possible options for camera movement. Used as abstraction to stay away from window-system specific input methods
 enum Camera_Direction {
