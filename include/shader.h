@@ -17,6 +17,7 @@ class _shader
 public:
     _shader();
     _shader(std::string vertex, std::string fragment);
+    //_shader& operator=(const _shader& other);
     ~_shader();
 
     bool load(std::string vertex, std::string fragment);

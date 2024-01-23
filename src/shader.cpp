@@ -5,13 +5,23 @@ _shader::_shader()
     programID = 0;
 }
 
-_shader::_shader(std::string vertex, std::string fragment)
+_shader::_shader(std::string vertex, std::string fragment) : _shader()
 {
-    _shader();
-
     load(vertex, fragment);
     compile();//VertexSource, FragmentSource);
 }
+/*
+_shader& _shader::operator=(const _shader& other)
+{
+  if (this != &other) {
+    VertexSource = other.VertexSource;
+    FragmentSource = other.FragmentSource;
+    loadedShaderFunctions = other.loadedShaderFunctions;
+    errorlog = std::stringstream(other.errorlog.str());
+    programID = other.programID;
+  }
+  return *this;
+}*/
 
 _shader::~_shader()
 {

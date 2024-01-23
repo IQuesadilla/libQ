@@ -4,6 +4,10 @@
 
 namespace libQ {
 
+log::log() {
+  internals = nullptr;
+}
+
 log::log(vlevel verbosity)
 {
   internals.reset(new _internals);
@@ -172,6 +176,10 @@ void log::printall(const char *uform, const char *form, loglevel lev)
 
 lifetimelog log::function(const char *name, _PrintFName doFName)
 {
+  if (!internals)
+    return lifetimelog(nullptr);
+
+
   std::stringstream templogstream;
   templogstream << "(" << _classname << name << ")";
   //std::string fstr = format(loglevel::FUNCTION,templogstream.str().c_str());
@@ -298,7 +306,8 @@ void operator<<(lifetimelog &buff, libQ::loglevel lev)
   //buff.currentlog += buff.logobj->format(lev,buff.logstream.str().c_str());
   //buff.logobj->flush(buff.currentlog.c_str());
 
-  buff.logobj->printall(buff.FuncBuff.c_str(),buff.logstream.str().c_str(),lev);
+  if (buff.logobj)
+    buff.logobj->printall(buff.FuncBuff.c_str(),buff.logstream.str().c_str(),lev);
 
   buff.logstream.str("");
   buff.logstream.clear();
@@ -307,6 +316,7 @@ void operator<<(lifetimelog &buff, libQ::loglevel lev)
 
 void lifetimelog::_log(const char *output)
 {
+  if (logobj)
     logstream << output;
 }
 

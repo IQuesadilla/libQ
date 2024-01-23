@@ -65,16 +65,16 @@ public:
     Camera_Movement direction;
     glm::mat4 ProjectionMatrix;
 
-    float viewsizex, viewsizey;
+    //float viewsizex, viewsizey;
 
     Camera(glm::vec3 position = glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f), float yaw = YAW, float pitch = PITCH);
     Camera(float posX, float posY, float posZ, float upX, float upY, float upZ, float yaw, float pitch);
 
     glm::mat4 GetViewMatrix();
     glm::mat4 GetRotViewMatrix();
-	  void BuildProjectionMatrix(float NearDepth = 0.1f, float FarDepth = 1000.0f);
+	  void BuildProjectionMatrix(float AspectRatio, float NearDepth = 0.1f, float FarDepth = 1000.0f);
 
-    void setViewSize(int x, int y);
+    static float setViewSize(int x, int y);
 
     void ProcessKeyboard(Camera_Direction inDirection, bool down);
     void ProcessMouseMovement(float xoffset, float yoffset, bool constrainPitch = true);

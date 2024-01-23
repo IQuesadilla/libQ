@@ -30,16 +30,15 @@ glm::mat4 Camera::GetRotViewMatrix()
     return glm::lookAt(glm::normalize(-Front), glm::vec3(0.0f), WorldUp);
 }
 
-void Camera::BuildProjectionMatrix(float NearDepth, float FarDepth)
+void Camera::BuildProjectionMatrix(float AspectRatio, float NearDepth, float FarDepth)
 {
-	ProjectionMatrix = glm::perspective(glm::radians(Zoom), viewsizex / viewsizey, NearDepth, FarDepth);
+	ProjectionMatrix = glm::perspective(glm::radians(Zoom), AspectRatio, NearDepth, FarDepth);
 }
 
-void Camera::setViewSize(int x, int y)
+float Camera::setViewSize(int x, int y)
 {
     glViewport(0,0,x,y);
-    viewsizex = float(x);
-    viewsizey = float(y);
+    return float(x) / float(y);
 }
 
 void Camera::ProcessKeyboard(Camera_Direction inDirection, bool down)

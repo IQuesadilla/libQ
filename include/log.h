@@ -46,7 +46,8 @@ enum _PrintFName
 class log
 {
 public:
-  log(vlevel verbosity = DEFAULT);
+  log();
+  log(vlevel verbosity);
   log(vlevel verbosity, std::function<void(const std::string)> PrintCallback);
   log(log* copy);
   log &operator=(const log& copy);
