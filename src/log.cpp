@@ -105,8 +105,8 @@ void log::printall(const char *func, const char *body, loglevel lev)
     //const char *arr[] = {func,body};
     //for (int i = 0; i < sizeof(arr)/sizeof(*arr); ++i)
     auto PrintLambda = [this,&x,&templogstream](const char *output, loglevel lev)
-    {
-      if (!output || !*output) return;
+    { // TODO: Some of this can be optimised by only calculating it once
+//      if (!output || !*output) return;
       //const char *output = arr[i]; 
       auto ms = std::to_string( std::chrono::duration_cast<std::chrono::milliseconds>
                     ( std::chrono::system_clock::now() - internals->globals->start).count() );
@@ -156,7 +156,8 @@ void log::printall(const char *func, const char *body, loglevel lev)
       templogstream << '\n';// << std::endl
     };
 
-    PrintLambda(func,FUNCTION);
+    if (func && *func)
+      PrintLambda(func,FUNCTION);
     PrintLambda(body,lev);
 
     x.second.output_lock.lock();
@@ -307,9 +308,9 @@ void operator<<(lifetimelog &buff, libQ::loglevel lev)
   //buff.logobj->flush(buff.currentlog.c_str());
 
   if (buff.logobj)
-    buff.logobj->printall(buff.FuncBuff.c_str(),buff.logstream.str().c_str(),lev);
+    buff.logobj->printall(buff.FuncBuff.c_str(),buff.logstream.c_str(),lev);
 
-  buff.logstream.str("");
+  buff.logstream = "";
   buff.logstream.clear();
   buff.FuncBuff = "";
 }
@@ -317,7 +318,7 @@ void operator<<(lifetimelog &buff, libQ::loglevel lev)
 void lifetimelog::_log(const char *output)
 {
   if (logobj)
-    logstream << output;
+    logstream.append(output);
 }
 
 }

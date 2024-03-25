@@ -125,7 +125,7 @@ public:
 private:
     void _log(const char *output);
 
-    std::stringstream logstream;
+    std::string logstream;
     std::string FuncBuff;
     libQ::log *logobj;
 };
