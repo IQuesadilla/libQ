@@ -1,6 +1,7 @@
-vcpkg/
 build/
 .cache/
 .vscode/
 *.o
 *.so
+subprojects/
+!subprojects/*.wrap
