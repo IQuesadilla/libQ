@@ -3,5 +3,5 @@ build/
 .vscode/
 *.o
 *.so
-subprojects/
-!subprojects/*.wrap
+/subprojects/*
+!/subprojects/*.wrap
