@@ -17,9 +17,11 @@ void *node_create(node_t **newnode, node_t *parent, int cmdc,
                   const char *cmdv[]);
 void node_destroy(node_t *qbinfo);
 
-int node_include_subdir(node_t *node, const char *path, void *arg);
+void node_include_subdir(node_t *node, const char *path, void *arg);
 
 void qbuild_throw(node_t *node, int rc);
+
+void qbuild_wait_all(node_t *any_node);
 
 // Package config dependencies
 pcdep_t *pcdep_create(node_t *node, const char *pcname);
@@ -60,6 +62,6 @@ void _so_add_linkables(so_step_t *step, ...);
 
 so_file_t *so_link(so_step_t *step);
 
-int so_run(so_file_t *file, const char *sym, void *arg);
+void so_run(so_file_t *file, const char *sym, void *arg);
 
 #endif

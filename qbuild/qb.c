@@ -47,9 +47,8 @@ int main(int argc, const char *argv[]) {
   int rc = setjmp(*(jmp_buf *)node_create(&node, NULL, os->argc - os->ind,
                                           &os->argv[os->ind]));
   if (rc == 0) {
-    // project_t *qb = project_create(qbinfo);
     node_include_subdir(node, ".", node);
-    // project_destroy(qb);
+    qbuild_wait_all(node);
   } else {
     printf("Failed to build, quitting\n");
   }
