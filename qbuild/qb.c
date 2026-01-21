@@ -43,17 +43,17 @@ int main(int argc, const char *argv[]) {
     return 0;
   }
 
-  qbinfo_t *qbinfo;
-  int rc = setjmp(*(jmp_buf *)qbinfo_create(&qbinfo, NULL, os->argc - os->ind,
-                                            &os->argv[os->ind]));
+  node_t *node;
+  int rc = setjmp(*(jmp_buf *)node_create(&node, NULL, os->argc - os->ind,
+                                          &os->argv[os->ind]));
   if (rc == 0) {
-    project_t *qb = project_create(qbinfo);
-    project_include_subdir(qb, ".", qbinfo);
-    project_destroy(qb);
+    // project_t *qb = project_create(qbinfo);
+    node_include_subdir(node, ".", node);
+    // project_destroy(qb);
   } else {
     printf("Failed to build, quitting\n");
   }
-  qbinfo_destroy(qbinfo);
+  node_destroy(node);
 
   qbuild_quit();
   return rc;
