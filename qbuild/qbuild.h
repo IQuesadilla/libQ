@@ -24,7 +24,8 @@ void qbuild_throw(node_t *node, int rc);
 void qbuild_wait_all(node_t *any_node);
 
 // Package config dependencies
-pcdep_t *pcdep_create(node_t *node, const char *pcname);
+#define pcdep_create(node, ...) _pcdep_create(node, __VA_ARGS__, 0)
+pcdep_t *_pcdep_create(node_t *node, ...);
 
 // C source files
 src_step_t *src_create(node_t *node, const char *path);

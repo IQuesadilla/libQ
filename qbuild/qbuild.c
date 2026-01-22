@@ -49,8 +49,20 @@ struct stream_chunk {
 };
 typedef struct stream_chunk stream_chunk_t;
 
+struct arg_list {
+  uint8_t id; // 0x80 | 'l'
+  apr_array_header_t *arr;
+};
+typedef struct arg_list arg_list_t;
+
+struct arg_map {
+  uint8_t id; // 0x80 | 'm'
+  apr_hash_t *hash;
+};
+typedef struct arg_map arg_map_t;
+
 typedef void (*process_fn_t)(node_t *node, void *baton);
-typedef apr_array_header_t *(*build_args_fn_t)(node_t *node, void *baton);
+typedef arg_list_t *(*build_args_fn_t)(node_t *node, void *baton);
 
 struct exec_unit {
   apr_pool_t *pool;
@@ -86,8 +98,8 @@ typedef struct step_core step_core_t;
 */
 
 struct pcdep_baton {
-  apr_array_header_t *args_in;
-  apr_array_header_t *args_out;
+  arg_list_t args_in;
+  arg_list_t args_out;
   exec_unit_t *exec_unit;
 };
 typedef struct pcdep_baton pcdep_baton_t;
@@ -100,18 +112,20 @@ struct pcdep {
 
 struct src_step {
   node_t node;
-  apr_array_header_t *args;
+  arg_list_t args;
   // apr_hash_t *cflags_args, *libs_args;
   apr_array_header_t *deps; // pcdep_t[]
   char *c_path, *compiled_path;
   exec_unit_t *exec_unit;
+  apr_time_t mtime;
 };
 
 struct linkable {
   node_t node;
-  apr_hash_t *libs_args;
+  arg_map_t libs_args;
   exec_unit_t *exec_unit;
   apr_array_header_t *deps; // pcdep_t[]
+  apr_time_t mtime;
   bool impored;
   char *path;
 };
@@ -132,18 +146,22 @@ struct ar_file {
 
 struct exe_step {
   node_t node;
-  apr_array_header_t *args, *linkables;
-  apr_hash_t *libs_args;
+  arg_list_t args;
+  apr_array_header_t *linkables;
+  arg_map_t libs_args;
   exec_unit_t *exec_unit;
   char *exename;
+  apr_time_t mtime;
 };
 
 struct so_step {
   node_t node;
-  apr_array_header_t *args, *linkables;
-  apr_hash_t *libs_args;
+  arg_list_t args;
+  apr_array_header_t *linkables;
+  arg_map_t libs_args;
   exec_unit_t *exec_unit;
   char *soname;
+  apr_time_t mtime;
 };
 
 struct so_file {
@@ -151,6 +169,7 @@ struct so_file {
   apr_dso_handle_t *dso;
   exec_unit_t *exec_unit;
   char *soname;
+  apr_time_t mtime;
 };
 
 /*
@@ -188,80 +207,116 @@ void print_args(const char *pre, const char *const *argv) {
 }
 */
 
-void cat_args_array(apr_hash_t **dst, apr_array_header_t *src,
-                    apr_pool_t *dstpool) {
-  if (src == NULL || dst == NULL)
-    return;
-
-  if (src->nelts <= 0)
-    return;
-
-  const char **src_elts = (const char **)src->elts;
-
-  if (*dst == NULL) {
-    // printf("making hash table\n");
-    *dst = apr_hash_make(dstpool);
-  }
-
-  for (int i = 0; i < src->nelts; i++) {
-    apr_hash_set(*dst, src_elts[i], APR_HASH_KEY_STRING, (void *)1);
-  }
-}
-
-int cat_args_hash_do_callback_fn_t(void *rec, const void *key, apr_ssize_t klen,
-                                   const void *value) {
-  apr_hash_t *dst = rec;
+int arg_map_combine_do_callback_fn_t(void *rec, const void *key,
+                                     apr_ssize_t klen, const void *value) {
+  arg_map_t *dst = rec;
   if (key)
-    apr_hash_set(dst, key, klen, (void *)1);
+    apr_hash_set(dst->hash, key, klen, (void *)1);
   return 1;
 }
 
-void cat_args_hash(apr_hash_t **dst, apr_hash_t *src, apr_pool_t *dstpool) {
-  if (src == NULL || dst == NULL)
-    return;
-
-  if (*dst == NULL) {
-    // *dst = apr_hash_copy(dstpool, src);
-    // return;
-    *dst = apr_hash_make(dstpool);
-  }
-
-  apr_hash_do(cat_args_hash_do_callback_fn_t, *dst, src);
-}
-
-int array_args_from_hash_do_callback_fn_t(void *rec, const void *key,
-                                          apr_ssize_t klen, const void *value) {
-  apr_array_header_t *dst = rec;
+int arg_list_append_map_do_callback_fn_t(void *rec, const void *key,
+                                         apr_ssize_t klen, const void *value) {
+  arg_list_t *dst = rec;
   if (key)
-    APR_ARRAY_PUSH(dst, char *) = (char *)key;
+    APR_ARRAY_PUSH(dst->arr, char *) = (char *)key;
   return 1;
 }
 
-void array_args_from_hash(apr_array_header_t **dst, apr_hash_t *src,
-                          apr_pool_t *dstpool) {
-  if (src == NULL || dst == NULL)
-    return;
-
-  if (*dst == NULL) {
-    *dst = apr_array_make(dstpool, apr_hash_count(src), sizeof(char *));
+void arg_list_vadd(arg_list_t *args, apr_pool_t *pool, va_list ap) {
+  if (args->arr == NULL) {
+    args->id = 0x80 | 'l';
+    args->arr = apr_array_make(pool, 8, sizeof(char *));
   }
 
-  apr_hash_do(array_args_from_hash_do_callback_fn_t, *dst, src);
+  const char *s;
+  while ((s = va_arg(ap, const char *)) != NULL) {
+    if (s == NULL)
+      continue;
+
+    uint8_t id = s[0];
+    switch (id) {
+    case 0:
+      printf("tried adding empty string to arg list\n");
+      break;
+    case (0x80 | 'l'): {
+      arg_list_t *in = (arg_list_t *)s;
+      if (in->arr) {
+        for (int e = 0; e < in->arr->nelts; ++e) {
+          const char *newarg = APR_ARRAY_IDX(in->arr, e, const char *);
+          APR_ARRAY_PUSH(args->arr, const char *) = apr_pstrdup(pool, newarg);
+        }
+      }
+    } break;
+    case (0x80 | 'm'): {
+      arg_map_t *in = (arg_map_t *)s;
+      apr_hash_do(arg_list_append_map_do_callback_fn_t, args, in->hash);
+    } break;
+    default: {
+      APR_ARRAY_PUSH(args->arr, const char *) = apr_pstrdup(pool, s);
+    } break;
+    }
+  }
 }
 
-bool should_skip(const char *gend, const char *input, apr_pool_t *pool) {
-  apr_finfo_t fgend, finput;
-  apr_status_t rc;
+void arg_list_add(arg_list_t *args, apr_pool_t *pool, ...) {
+  va_list ap;
+  va_start(ap, pool);
+  arg_list_vadd(args, pool, ap);
+  va_end(ap);
+}
 
-  rc = apr_stat(&fgend, gend, APR_FINFO_MTIME, pool);
+void arg_map_vadd(arg_map_t *args, apr_pool_t *pool, va_list ap) {
+  if (args->hash == NULL) {
+    args->id = 0x80 | 'm';
+    args->hash = apr_hash_make(pool);
+  }
+
+  const char *s;
+  while ((s = va_arg(ap, const char *)) != NULL) {
+    if (s == NULL)
+      continue;
+
+    uint8_t id = s[0];
+    switch (id) {
+    case 0:
+      printf("tried adding empty string to arg map\n");
+      break;
+    case (0x80 | 'l'): {
+      arg_list_t *in = (arg_list_t *)s;
+      if (in->arr) {
+        for (int e = 0; e < in->arr->nelts; e++) {
+          const char *newarg = APR_ARRAY_IDX(in->arr, e, const char *);
+          apr_hash_set(args->hash, apr_pstrdup(pool, newarg),
+                       APR_HASH_KEY_STRING, (void *)1);
+        }
+      }
+    } break;
+    case (0x80 | 'm'): {
+      arg_map_t *in = (arg_map_t *)s;
+      apr_hash_do(arg_map_combine_do_callback_fn_t, args, in->hash);
+    } break;
+    default:
+      apr_hash_set(args->hash, apr_pstrdup(pool, s), APR_HASH_KEY_STRING,
+                   (void *)1);
+      break;
+    }
+  }
+}
+
+void arg_map_add(arg_map_t *args, apr_pool_t *pool, ...) {
+  va_list ap;
+  va_start(ap, pool);
+  arg_map_vadd(args, pool, ap);
+  va_end(ap);
+}
+
+apr_time_t get_mtime(const char *path, apr_pool_t *pool) {
+  apr_finfo_t finfo;
+  apr_status_t rc = apr_stat(&finfo, path, APR_FINFO_MTIME, pool);
   if (rc != APR_SUCCESS)
-    return false;
-
-  rc = apr_stat(&finput, input, APR_FINFO_MTIME, pool);
-  if (rc != APR_SUCCESS)
-    return false;
-
-  return fgend.mtime > finput.mtime;
+    return 0;
+  return finfo.mtime;
 }
 
 void qbuild_init() { apr_initialize(); }
@@ -349,11 +404,11 @@ void exec_unit_run(exec_unit_t *unit) {
     apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
   }
 
-  apr_array_header_t *args = unit->build_args(unit->parent, unit->baton);
-  unit->cmdline = apr_array_pstrcat(unit->pool, args, ' ');
-  const char **null_elt = apr_array_push(args);
+  arg_list_t *args = unit->build_args(unit->parent, unit->baton);
+  unit->cmdline = apr_array_pstrcat(unit->pool, args->arr, ' ');
+  const char **null_elt = apr_array_push(args->arr);
   *null_elt = NULL;
-  const char *const *argv = (const char *const *)args->elts;
+  const char *const *argv = (const char *const *)args->arr->elts;
 
   if (unit->status == EXEC_UNIT_SKIPPED) {
     printf("Skip: %s %p\n", unit->cmdline, unit);
@@ -402,7 +457,7 @@ void exec_add_dep(exec_unit_t *node, exec_unit_t *dep) {
 }
 
 void exec_check_deps(exec_unit_t *unit) {
-  printf("Check deps for %p\n", unit->parent);
+  // printf("Check deps for %p\n", unit->parent);
   if (unit && unit->deps) {
     for (int d = 0; d < unit->deps->nelts; ++d) {
       exec_unit_t *dep = APR_ARRAY_IDX(unit->deps, d, exec_unit_t *);
@@ -415,7 +470,7 @@ void exec_check_deps(exec_unit_t *unit) {
 
 void exec_check_rdeps(exec_unit_t *node) {
   assert(node);
-  printf("Check rdeps for %p\n", node->parent);
+  // printf("Check rdeps for %p\n", node->parent);
   if (node->rdeps) {
     for (int r = 0; r < node->rdeps->nelts; ++r) {
       exec_unit_t *rdep = APR_ARRAY_IDX(node->rdeps, r, exec_unit_t *);
@@ -478,21 +533,21 @@ void exec_unit_mark_skip(exec_unit_t *unit) {
   unit->status = EXEC_UNIT_SKIPPED;
 }
 
-exec_unit_t *exec_unit_init(node_t *node, void *baton, process_fn_t process,
+exec_unit_t *exec_unit_init(node_t *node, process_fn_t process,
                             build_args_fn_t build_args) {
   apr_pool_t *pool;
   apr_pool_create(&pool, node->pool);
   exec_unit_t *unit = apr_pcalloc(pool, sizeof(*unit));
   unit->pool = pool;
   unit->parent = node;
-  unit->baton = baton;
   unit->build_args = build_args;
   unit->process = process;
 
   return unit;
 }
 
-void exec_unit_submit(exec_unit_t *unit) {
+void exec_unit_submit(exec_unit_t *unit, void *baton) {
+  unit->baton = baton;
   exec_check_deps(unit); //
 }
 
@@ -522,22 +577,6 @@ void exec_unit_destroy(exec_unit_t *unit) {
   apr_pool_destroy(unit->pool); //
 }
 
-void vadd_args(apr_array_header_t *args, va_list ap) {
-  const char *s;
-
-  while ((s = va_arg(ap, const char *)) != NULL) {
-    const char **elt = apr_array_push(args);
-    *elt = apr_pstrdup(args->pool, s);
-  }
-}
-
-void add_args(apr_array_header_t *args, ...) {
-  va_list ap;
-  va_start(ap, args);
-  vadd_args(args, ap);
-  va_end(ap);
-}
-
 void pcdep_process(node_t *node, void *vbaton) {
   pcdep_t *dep = (pcdep_t *)node;
   pcdep_baton_t *baton = vbaton;
@@ -555,42 +594,54 @@ void pcdep_process(node_t *node, void *vbaton) {
   char *saveptr = NULL;
   char *token;
 
-  apr_array_header_t *pcargs =
-      apr_array_make(dep->node.pool, 8, sizeof(const char *));
+  // arg_list_init(&baton->args_out, dep->node.pool);
   const char *seps = " \n\r\t";
   for (token = apr_strtok(output, seps, &saveptr); token != NULL;
        token = apr_strtok(NULL, seps, &saveptr)) {
-    const char **elt = apr_array_push(pcargs);
-    *elt = apr_pstrdup(dep->node.pool, token);
+    arg_list_add(&baton->args_out, dep->node.pool, token, NULL);
+    // const char **elt = apr_array_push(pcargs);
+    // *elt = apr_pstrdup(dep->node.pool, token);
   }
 
-  baton->args_out = pcargs;
+  // baton->args_out = pcargs;
   // exec_unit_destroy(unit);
 }
 
-apr_array_header_t *pcdep_build_args(node_t *node, void *vbaton) {
+arg_list_t *pcdep_build_args(node_t *node, void *vbaton) {
   pcdep_baton_t *baton = vbaton;
-  return baton->args_in;
+  return &baton->args_in;
 }
 
-pcdep_t *pcdep_create(node_t *node, const char *pcname) {
-  apr_pool_t *argpool;
+pcdep_t *_pcdep_create(node_t *node, ...) {
   pcdep_t *dep = (void *)subnode_create(node, sizeof(*dep));
 
+  apr_pool_t *argpool;
   apr_pool_create(&argpool, dep->node.pool);
-  apr_array_header_t *cflags_args = apr_array_make(argpool, 4, sizeof(char *));
-  add_args(cflags_args, "pkg-config", pcname, "--cflags", NULL);
+  arg_list_t cflags_args = {0}, libs_args = {0};
+  // apr_array_header_t *cflags_args = apr_array_make(argpool, 4, sizeof(char
+  // *));
+  arg_list_add(&cflags_args, argpool, "pkg-config", "--cflags", NULL);
+  // apr_array_header_t *libs_args = apr_array_make(argpool, 4, sizeof(char *));
+  arg_list_add(&libs_args, argpool, "pkg-config", "--libs", NULL);
+
+  const char *pcname;
+  va_list ap;
+  va_start(ap, node);
+  while ((pcname = va_arg(ap, const char *)) != NULL) {
+    arg_list_add(&cflags_args, argpool, pcname, NULL);
+    arg_list_add(&libs_args, argpool, pcname, NULL);
+  }
+  va_end(ap);
+
   dep->cflags.args_in = cflags_args;
   dep->cflags.exec_unit =
-      exec_unit_init(&dep->node, &dep->cflags, pcdep_process, pcdep_build_args);
-  exec_unit_submit(dep->cflags.exec_unit);
+      exec_unit_init(&dep->node, pcdep_process, pcdep_build_args);
+  exec_unit_submit(dep->cflags.exec_unit, &dep->cflags);
 
-  apr_array_header_t *libs_args = apr_array_make(argpool, 4, sizeof(char *));
-  add_args(libs_args, "pkg-config", pcname, "--libs", NULL);
   dep->libs.args_in = libs_args;
   dep->libs.exec_unit =
-      exec_unit_init(&dep->node, &dep->libs, pcdep_process, pcdep_build_args);
-  exec_unit_submit(dep->libs.exec_unit);
+      exec_unit_init(&dep->node, pcdep_process, pcdep_build_args);
+  exec_unit_submit(dep->libs.exec_unit, &dep->libs);
 
   // apr_pool_destroy(argpool);
   return dep;
@@ -599,7 +650,7 @@ pcdep_t *pcdep_create(node_t *node, const char *pcname) {
 void _src_add_args(src_step_t *b, ...) {
   va_list ap;
   va_start(ap, b);
-  vadd_args(b->args, ap);
+  arg_list_vadd(&b->args, b->node.pool, ap);
   va_end(ap);
 }
 
@@ -619,27 +670,31 @@ void _src_add_deps(src_step_t *step, ...) {
   va_end(ap);
 }
 
-apr_array_header_t *src_build_args(node_t *node, void *vbaton) {
+arg_list_t *src_build_args(node_t *node, void *vbaton) {
   src_step_t *step = (src_step_t *)node;
 
   if (step->deps && step->deps->nelts > 0) {
-    apr_hash_t *cflags_args = NULL;
+    arg_map_t cflags_args = {0};
     for (int d = 0; d < step->deps->nelts; ++d) {
       pcdep_t *dep = APR_ARRAY_IDX(step->deps, d, pcdep_t *);
-      cat_args_array(&cflags_args, dep->cflags.args_out, node->pool);
+      // arg_map_append_list(&cflags_args, &dep->cflags.args_out, node->pool);
+      arg_map_add(&cflags_args, node->pool, &dep->cflags.args_out, NULL);
     }
 
-    array_args_from_hash(&step->args, cflags_args, node->pool);
+    arg_list_add(&step->args, node->pool, &cflags_args, NULL);
   }
 
-  if (should_skip(step->compiled_path, step->c_path, step->node.pool))
+  linkable_t *file = vbaton;
+  printf("src_build_args: %ld < %ld\n", step->mtime, file->mtime);
+  if (step->mtime > 0 && step->mtime < file->mtime)
     exec_unit_mark_skip(step->exec_unit);
 
-  return step->args;
+  return &step->args;
 }
 
 void src_process(node_t *node, void *vbaton) {
-  ; // Does nothing?
+  linkable_t *file = vbaton;
+  file->mtime = get_mtime(file->path, file->node.pool);
 }
 
 src_step_t *src_create(node_t *node, const char *path) {
@@ -648,12 +703,12 @@ src_step_t *src_create(node_t *node, const char *path) {
   step->c_path = apr_pstrdup(step->node.pool, path);
   step->compiled_path = apr_psprintf(step->node.pool, "build_cache/%s.o", path);
 
-  step->args = apr_array_make(step->node.pool, 8, sizeof(const char *));
+  // step->args = apr_array_make(step->node.pool, 8, sizeof(const char *));
   src_add_args(step, "gcc", "-c", "-o", step->compiled_path, path, "-fPIC",
                NULL);
+  step->mtime = get_mtime(step->c_path, step->node.pool);
 
-  step->exec_unit =
-      exec_unit_init(&step->node, NULL, src_process, src_build_args);
+  step->exec_unit = exec_unit_init(&step->node, src_process, src_build_args);
 
   return step;
 }
@@ -670,8 +725,9 @@ linkable_t *src_compile(src_step_t *step) {
   file->path = apr_pstrdup(file->node.pool, step->compiled_path);
   file->exec_unit = step->exec_unit;
   file->deps = step->deps;
+  file->mtime = get_mtime(file->path, file->node.pool);
 
-  exec_unit_submit(step->exec_unit);
+  exec_unit_submit(step->exec_unit, file);
 
   // cat_args(&step->libs_args, b->libs_args, step->pool);
   // file->libs_args = NULL;
@@ -702,44 +758,45 @@ linkable_t *ar_import(node_t *node, const char *path) {
 void exe_add_args(exe_step_t *b, ...) {
   va_list ap;
   va_start(ap, b);
-  vadd_args(b->args, ap);
+  arg_list_vadd(&b->args, b->node.pool, ap);
   va_end(ap);
 }
 
-bool complete_builds(apr_array_header_t *linkables, apr_array_header_t *args,
-                     apr_hash_t *libs_args, apr_pool_t *pool,
-                     const char *outfile) {
-  bool skip = true;
+bool complete_builds(apr_array_header_t *linkables, arg_list_t *args,
+                     arg_map_t *libs_args, apr_pool_t *pool,
+                     const char *outfile, apr_time_t mtime) {
+  bool skip = mtime > 0;
   for (int i = 0; i < linkables->nelts; ++i) {
     linkable_t *file = APR_ARRAY_IDX(linkables, i, linkable_t *);
-    add_args(args, file->path, NULL);
+    arg_list_add(args, pool, file->path, NULL);
 
     if (file->exec_unit) {
       // exec_unit_wait(file->exec_unit);
-      if (file->exec_unit->status != EXEC_UNIT_SKIPPED)
+      printf("complete_builds: %ld > %ld\n", file->mtime, mtime);
+      if (file->mtime > mtime)
         skip = false;
     }
 
     if (file->deps) {
       for (int d = 0; d < file->deps->nelts; ++d) {
         pcdep_t *dep = APR_ARRAY_IDX(file->deps, d, pcdep_t *);
-        if (dep->libs.args_out && dep->libs.args_out->nelts > 0) {
-          cat_args_array(&libs_args, dep->libs.args_out, pool);
+        if (dep->libs.args_out.arr && dep->libs.args_out.arr->nelts > 0) {
+          arg_map_add(libs_args, pool, &dep->libs.args_out, NULL);
         }
       }
     }
   }
 
-  array_args_from_hash(&args, libs_args, pool);
+  arg_list_add(args, pool, libs_args, NULL);
   return skip;
 }
 
-apr_array_header_t *exe_build_args(node_t *node, void *vbaton) {
+arg_list_t *exe_build_args(node_t *node, void *vbaton) {
   exe_step_t *step = (exe_step_t *)node;
-  if (complete_builds(step->linkables, step->args, step->libs_args,
-                      step->node.pool, step->exename))
+  if (complete_builds(step->linkables, &step->args, &step->libs_args,
+                      step->node.pool, step->exename, step->mtime))
     exec_unit_mark_skip(step->exec_unit);
-  return step->args;
+  return &step->args;
 }
 
 void exe_process(node_t *node, void *vbaton) {
@@ -751,11 +808,11 @@ exe_step_t *exe_create(node_t *node, const char *exename) {
 
   step->exename = apr_pstrdup(step->node.pool, exename);
 
-  step->args = apr_array_make(step->node.pool, 8, sizeof(const char *));
+  // step->args = apr_array_make(step->node.pool, 8, sizeof(const char *));
   exe_add_args(step, "gcc", "-o", step->exename, NULL);
+  step->mtime = get_mtime(step->exename, step->node.pool);
 
-  step->exec_unit =
-      exec_unit_init(&step->node, NULL, exe_process, exe_build_args);
+  step->exec_unit = exec_unit_init(&step->node, exe_process, exe_build_args);
 
   return step;
 }
@@ -788,7 +845,7 @@ void exe_link(exe_step_t *step) {
         exec_add_dep(step->exec_unit, linkable->exec_unit);
     }
 
-  exec_unit_submit(step->exec_unit);
+  exec_unit_submit(step->exec_unit, NULL);
 }
 
 /*
@@ -800,33 +857,37 @@ void exe_destroy(exe_step_t *step) {
 void _so_add_args(so_step_t *b, ...) {
   va_list ap;
   va_start(ap, b);
-  vadd_args(b->args, ap);
+  arg_list_vadd(&b->args, b->node.pool, ap);
   va_end(ap);
 }
 
 void _so_add_libs(so_step_t *step, ...) {
   va_list ap;
   va_start(ap, step);
+  // if (step->libs_args.hash == NULL)
+  // arg_map_init(&step->libs_args, step->node.pool);
+
   const char *s;
   while ((s = va_arg(ap, const char *)) != NULL) {
-    if (step->libs_args == NULL)
-      step->libs_args = apr_hash_make(step->node.pool);
-    apr_hash_set(step->libs_args, apr_pstrcat(step->node.pool, "-l", s, NULL),
-                 APR_HASH_KEY_STRING, (void *)1);
+    // apr_hash_set(step->libs_args, apr_pstrcat(step->node.pool, "-l", s,
+    // NULL), APR_HASH_KEY_STRING, (void *)1);
+    arg_map_add(&step->libs_args, step->node.pool,
+                apr_pstrcat(step->node.pool, "-l", s, NULL), NULL);
   }
   va_end(ap);
 }
 
-apr_array_header_t *so_build_args(node_t *node, void *vbaton) {
+arg_list_t *so_build_args(node_t *node, void *vbaton) {
   so_step_t *step = (so_step_t *)node;
-  if (complete_builds(step->linkables, step->args, step->libs_args,
-                      step->node.pool, step->soname))
+  if (complete_builds(step->linkables, &step->args, &step->libs_args,
+                      step->node.pool, step->soname, step->mtime))
     exec_unit_mark_skip(step->exec_unit);
-  return step->args;
+  return &step->args;
 }
 
 void so_process(node_t *node, void *vbaton) {
-  ; // Do nothing?
+  so_file_t *outfile = vbaton;
+  outfile->mtime = get_mtime(outfile->soname, outfile->node.pool);
 }
 
 so_step_t *so_create(node_t *node, const char *soname) {
@@ -834,13 +895,11 @@ so_step_t *so_create(node_t *node, const char *soname) {
 
   step->soname = apr_pstrdup(step->node.pool, soname);
 
-  step->libs_args = NULL;
-  step->linkables = NULL;
-  step->args = apr_array_make(step->node.pool, 8, sizeof(const char *));
+  // step->args = apr_array_make(step->node.pool, 8, sizeof(const char *));
   so_add_args(step, "gcc", "-o", step->soname, "-shared", NULL);
+  step->mtime = get_mtime(step->soname, step->node.pool);
 
-  step->exec_unit =
-      exec_unit_init(&step->node, NULL, so_process, so_build_args);
+  step->exec_unit = exec_unit_init(&step->node, so_process, so_build_args);
 
   return step;
 }
@@ -860,13 +919,13 @@ so_file_t *so_link(so_step_t *step) {
         exec_add_dep(step->exec_unit, linkable->exec_unit);
     }
 
-  exec_unit_submit(step->exec_unit);
-
   so_file_t *outfile = (void *)subnode_create(&step->node, sizeof(*outfile));
 
   outfile->dso = NULL;
   outfile->soname = apr_pstrdup(outfile->node.pool, step->soname);
   outfile->exec_unit = step->exec_unit;
+
+  exec_unit_submit(step->exec_unit, outfile);
 
   return outfile;
 }
