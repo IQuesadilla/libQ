@@ -49,6 +49,7 @@ int main(int argc, const char *argv[]) {
   if (rc == 0) {
     node_include_subdir(node, ".", node);
     qbuild_wait_all(node);
+    printf("Cleaning up\n");
   } else {
     printf("Failed to build, quitting\n");
   }

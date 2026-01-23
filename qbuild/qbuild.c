@@ -22,10 +22,51 @@ enum step_type {
 };
 typedef enum step_type step_type_t;
 
+struct arg_list {
+  uint8_t id; // 0x80 | 'l'
+  apr_array_header_t *arr;
+};
+typedef struct arg_list arg_list_t;
+
+struct arg_map {
+  uint8_t id; // 0x80 | 'm'
+  apr_hash_t *hash;
+};
+typedef struct arg_map arg_map_t;
+
+typedef void (*process_fn_t)(node_t *node, void *baton);
+typedef arg_list_t *(*build_args_fn_t)(node_t *node, void *baton);
+
+typedef struct exec_unit exec_unit_t;
+struct exec_unit {
+  apr_pool_t *pool;
+  apr_proc_t proc;
+  // qbinfo_t *qbinfo;
+  node_t *parent;
+  apr_array_header_t *stdout_buffer, *stderr_buffer;
+  apr_size_t stdout_total, stderr_total;
+  char *cmdline;
+  enum {
+    EXEC_UNIT_RUNNING,
+    EXEC_UNIT_SUCCESS,
+    EXEC_UNIT_FAILURE,
+    EXEC_UNIT_CRASH,
+    EXEC_UNIT_SKIPPED,
+  } status;
+  void *baton;
+  process_fn_t process;
+  build_args_fn_t build_args;
+  bool processed;
+  // process is called when all deps have completed
+  apr_array_header_t *deps, *rdeps;
+  exec_unit_t *next;
+};
+
 struct qbinfo {
   int nexecunits, maxexecunits;
   int cmdc;
   const char **cmdv;
+  exec_unit_t *head, *tail;
 };
 typedef struct qbinfo qbinfo_t;
 
@@ -48,45 +89,6 @@ struct stream_chunk {
   apr_size_t n;
 };
 typedef struct stream_chunk stream_chunk_t;
-
-struct arg_list {
-  uint8_t id; // 0x80 | 'l'
-  apr_array_header_t *arr;
-};
-typedef struct arg_list arg_list_t;
-
-struct arg_map {
-  uint8_t id; // 0x80 | 'm'
-  apr_hash_t *hash;
-};
-typedef struct arg_map arg_map_t;
-
-typedef void (*process_fn_t)(node_t *node, void *baton);
-typedef arg_list_t *(*build_args_fn_t)(node_t *node, void *baton);
-
-struct exec_unit {
-  apr_pool_t *pool;
-  apr_proc_t proc;
-  // qbinfo_t *qbinfo;
-  node_t *parent;
-  apr_array_header_t *stdout_buffer, *stderr_buffer;
-  apr_size_t stdout_total, stderr_total;
-  char *cmdline;
-  enum {
-    EXEC_UNIT_RUNNING,
-    EXEC_UNIT_SUCCESS,
-    EXEC_UNIT_FAILURE,
-    EXEC_UNIT_CRASH,
-    EXEC_UNIT_SKIPPED,
-  } status;
-  void *baton;
-  process_fn_t process;
-  build_args_fn_t build_args;
-  bool processed;
-  // process is called when all deps have completed
-  apr_array_header_t *deps, *rdeps;
-};
-typedef struct exec_unit exec_unit_t;
 
 /*
 struct step_core {
@@ -359,6 +361,26 @@ void node_include_subdir(node_t *node, const char *path, void *arg) {
   }
 }
 
+void exec_unit_push(exec_unit_t *unit) {
+  qbinfo_t *qbinfo = unit->parent->qbinfo;
+  if (qbinfo->head == NULL) {
+    qbinfo->head = unit;
+  } else {
+    qbinfo->tail->next = unit;
+  }
+  qbinfo->tail = unit;
+}
+
+exec_unit_t *exec_unit_pop(qbinfo_t *qbinfo) {
+  if (qbinfo->head == NULL)
+    return NULL;
+  exec_unit_t *ret = qbinfo->head;
+  qbinfo->head = qbinfo->head->next;
+  if (qbinfo->head == NULL)
+    qbinfo->tail = NULL;
+  return ret;
+}
+
 apr_size_t exec_unit_io_update_single(apr_file_t *pipe,
                                       apr_array_header_t *buffer) {
   apr_size_t n, total = 0;
@@ -393,8 +415,10 @@ void exec_unit_io_update(exec_unit_t *unit) {
 
 void exec_unit_maint(int reason, void *ud, int code);
 void exec_check_rdeps(exec_unit_t *node);
+void exec_unit_flush(qbinfo_t *qbinfo);
 
 void exec_unit_run(exec_unit_t *unit) {
+  /*
   apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
   printf("nexecunits: %d | maxexecunits %d\n", unit->parent->qbinfo->nexecunits,
          unit->parent->qbinfo->maxexecunits);
@@ -403,6 +427,7 @@ void exec_unit_run(exec_unit_t *unit) {
     apr_sleep(500);
     apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
   }
+  */
 
   arg_list_t *args = unit->build_args(unit->parent, unit->baton);
   unit->cmdline = apr_array_pstrcat(unit->pool, args->arr, ' ');
@@ -456,8 +481,20 @@ void exec_add_dep(exec_unit_t *node, exec_unit_t *dep) {
   *(exec_unit_t **)apr_array_push(dep->rdeps) = node;
 }
 
+void exec_unit_flush(qbinfo_t *qbinfo) {
+  while (qbinfo->nexecunits < qbinfo->maxexecunits) {
+    exec_unit_t *torun = exec_unit_pop(qbinfo);
+    if (torun) {
+      printf("Run from head\n");
+      exec_unit_run(torun);
+    } else
+      break;
+  }
+}
+
 void exec_check_deps(exec_unit_t *unit) {
-  // printf("Check deps for %p\n", unit->parent);
+  exec_unit_flush(unit->parent->qbinfo);
+  printf("Check deps for %p\n", unit->parent);
   if (unit && unit->deps) {
     for (int d = 0; d < unit->deps->nelts; ++d) {
       exec_unit_t *dep = APR_ARRAY_IDX(unit->deps, d, exec_unit_t *);
@@ -465,12 +502,26 @@ void exec_check_deps(exec_unit_t *unit) {
         return;
     }
   }
-  exec_unit_run(unit);
+
+  qbinfo_t *qbinfo = unit->parent->qbinfo;
+  if (qbinfo->nexecunits < qbinfo->maxexecunits) {
+    if (qbinfo->head) {
+      printf("Run from head\n");
+      exec_unit_run(exec_unit_pop(qbinfo));
+    } else {
+      printf("Run current\n");
+      exec_unit_run(unit);
+    }
+  } else {
+    printf("Push to tail\n");
+    exec_unit_push(unit);
+  }
 }
 
 void exec_check_rdeps(exec_unit_t *node) {
   assert(node);
-  // printf("Check rdeps for %p\n", node->parent);
+  exec_unit_flush(node->parent->qbinfo);
+  printf("Check rdeps for %p\n", node->parent);
   if (node->rdeps) {
     for (int r = 0; r < node->rdeps->nelts; ++r) {
       exec_unit_t *rdep = APR_ARRAY_IDX(node->rdeps, r, exec_unit_t *);
@@ -491,6 +542,7 @@ void exec_unit_maint(int reason, void *ud, int code) {
   case APR_OC_REASON_DEATH:
   case APR_OC_REASON_LOST:
     unit->parent->qbinfo->nexecunits -= 1;
+    printf("Completed: %p\n", unit);
     exec_unit_io_update(unit);
     apr_proc_other_child_unregister(unit);
     if (code == 0) {
@@ -559,6 +611,7 @@ void exec_unit_wait(exec_unit_t *unit) {
   while (unit->status == EXEC_UNIT_RUNNING) {
     apr_sleep(500);
     apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
+    exec_unit_flush(unit->parent->qbinfo);
   }
 }
 
@@ -567,9 +620,10 @@ void qbuild_wait_all(node_t *node) {
   printf("Waiting on all...\n");
   printf("nexecunits: %d | maxexecunits %d\n", node->qbinfo->nexecunits,
          node->qbinfo->maxexecunits);
-  while (node->qbinfo->nexecunits > 0) {
+  while (node->qbinfo->nexecunits > 0 || node->qbinfo->head != NULL) {
     apr_sleep(500);
     apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
+    exec_unit_flush(node->qbinfo);
   }
 }
 
@@ -713,6 +767,37 @@ src_step_t *src_create(node_t *node, const char *path) {
   return step;
 }
 
+#define PATH_SEPARATOR '/'
+
+/* Remove trailing separators that don't affect the meaning of PATH. */
+
+static const char *path_canonicalize(const char *path, apr_pool_t *pool) {
+  /* At some point this could eliminate redundant components.  For
+   * now, it just makes sure there is no trailing slash. */
+
+  apr_size_t len = strlen(path);
+  apr_size_t orig_len = len;
+  while ((len > 0) && (path[len - 1] == PATH_SEPARATOR))
+    len--;
+
+  if (len != orig_len)
+    return apr_pstrndup(pool, path, len);
+  else
+    return path;
+}
+
+/* Remove one component off the end of PATH. */
+static char *path_remove_last_component(const char *path, apr_pool_t *pool) {
+  const char *newpath = path_canonicalize(path, pool);
+  int i;
+  for (i = (strlen(newpath) - 1); i >= 0; i--) {
+    if (path[i] == PATH_SEPARATOR)
+      break;
+  }
+
+  return apr_pstrndup(pool, path, (i < 0) ? 0 : i);
+}
+
 linkable_t *src_compile(src_step_t *step) {
   apr_procattr_t *procattr;
   apr_procattr_create(&procattr, step->node.pool);
@@ -726,6 +811,9 @@ linkable_t *src_compile(src_step_t *step) {
   file->exec_unit = step->exec_unit;
   file->deps = step->deps;
   file->mtime = get_mtime(file->path, file->node.pool);
+
+  const char *dirpath = path_remove_last_component(file->path, file->node.pool);
+  apr_dir_make_recursive(dirpath, APR_FPROT_OS_DEFAULT, file->node.pool);
 
   exec_unit_submit(step->exec_unit, file);
 
@@ -952,9 +1040,11 @@ void *node_create(node_t **newnode, node_t *parent, int cmdc,
     qbinfo->maxexecunits = 8;
     qbinfo->cmdc = cmdc;
     qbinfo->cmdv = cmdv;
+    qbinfo->head = NULL;
+    qbinfo->tail = NULL;
     apr_dir_make_recursive("build_cache/", APR_FPROT_OS_DEFAULT, pool);
   }
-  node_t *node = apr_palloc(pool, sizeof(*node));
+  node_t *node = apr_pcalloc(pool, sizeof(*node));
   node->pool = pool;
   node->qbinfo = qbinfo;
   node->catch = apr_palloc(pool, sizeof(catch_t));
