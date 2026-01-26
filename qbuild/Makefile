@@ -12,6 +12,7 @@ install: libqbuild.so
 	sudo mkdir -p /usr/local/include
 	sudo cp libqbuild.so /usr/local/lib/
 	sudo cp qbuild.h /usr/local/include/
+	sudo cp qb.h /usr/local/include/
 
 qbinstall: qb
 	sudo mkdir -p /usr/local/bin

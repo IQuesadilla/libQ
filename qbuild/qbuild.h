@@ -9,19 +9,19 @@ typedef struct exe_step exe_step_t;
 typedef struct so_step so_step_t;
 typedef struct so_file so_file_t;
 
-void qbuild_init();
-void qbuild_quit();
-
 // General tree structure
-void *node_create(node_t **newnode, node_t *parent, int cmdc,
-                  const char *cmdv[]);
 void node_destroy(node_t *qbinfo);
 
 void node_include_subdir(node_t *node, const char *path, void *arg);
 
 void qbuild_throw(node_t *node, int rc);
 
-void qbuild_wait_all(node_t *any_node);
+void qbuild_logf(node_t *node, const char *fmt, ...);
+
+#define qbuild_assert(test, node)                                              \
+  if (!((test)))                                                               \
+  _qbuild_assert(node, __FILE__, __LINE__)
+void _qbuild_assert(node_t *node, const char *file, const int line);
 
 // Package config dependencies
 #define pcdep_create(node, ...) _pcdep_create(node, __VA_ARGS__, 0)
@@ -43,6 +43,12 @@ linkable_t *ar_import(node_t *node, const char *path);
 
 // Executables
 exe_step_t *exe_create(node_t *node, const char *exename);
+
+#define exe_add_args(step, ...) _exe_add_args(step, __VA_ARGS__, 0);
+void _exe_add_args(exe_step_t *step, ...);
+
+#define exe_add_libs(step, ...) _exe_add_libs(step, __VA_ARGS__, 0);
+void _exe_add_libs(exe_step_t *step, ...);
 
 #define exe_add_linkables(step, ...) _exe_add_linkables(step, __VA_ARGS__, 0)
 void _exe_add_linkables(exe_step_t *step, ...);
