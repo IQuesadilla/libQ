@@ -1,4 +1,5 @@
 #include "qb.h"
+
 #include <setjmp.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -21,7 +22,8 @@ int main(int argc, const char *argv[]) {
   os->interleave = 1;
 
   struct {
-    uint help : 1;
+    bool help;
+    qb_command_t cmd;
   } flags = {0};
 
   int optch;
@@ -43,12 +45,13 @@ int main(int argc, const char *argv[]) {
     return 0;
   }
 
-  node_t *node;
-  int rc = setjmp(*(jmp_buf *)root_node_create(&node, NULL, os->argc - os->ind,
-                                               &os->argv[os->ind]));
+  flags.cmd = QB_BUILD;
+
+  node_t node;
+  int rc = setjmp(*(jmp_buf *)root_node_create(&node, NULL, flags.cmd));
   qbuild_log_stderr(node);
   if (rc == 0) {
-    node_include_subdir(node, ".", node);
+    node_include_subdir(node, ".");
     qbuild_wait_all(node);
     printf("Cleaning up\n");
   } else {
