@@ -1,5 +1,6 @@
 #include "qbuild.h"
 #include "qb.h"
+#include "qexec.h"
 #include "qtest.h"
 
 #include <apr.h>
@@ -24,81 +25,6 @@ enum step_type {
   STEP_ARFILE,
 };
 typedef enum step_type step_type_t;
-
-struct arg_list {
-  uint8_t id;              // 0x80 | 'l'
-  apr_array_header_t *arr; // char*
-};
-typedef struct arg_list arg_list_t;
-
-struct arg_map {
-  uint8_t id;       // 0x80 | 'm'
-  apr_hash_t *hash; // char*
-};
-typedef struct arg_map arg_map_t;
-
-typedef void (*process_fn_t)(node_t node, void *baton);
-typedef arg_list_t *(*build_args_fn_t)(node_t node, void *baton);
-
-typedef struct exec_unit exec_unit_t;
-struct exec_unit {
-  apr_pool_t *pool;
-  apr_proc_t proc;
-  // qbinfo_t *qbinfo;
-  node_t parent;
-  apr_array_header_t *stdout_buffer, *stderr_buffer;
-  apr_size_t stdout_total, stderr_total;
-  char *cmdline;
-  enum {
-    EXEC_UNIT_RUNNING,
-    EXEC_UNIT_SUCCESS,
-    EXEC_UNIT_FAILURE,
-    EXEC_UNIT_CRASH,
-    EXEC_UNIT_SKIPPED,
-  } status;
-  void *baton;
-  process_fn_t process;
-  build_args_fn_t build_args;
-  bool processed, queued;
-  // process is called when all deps have completed
-  apr_array_header_t *deps, *rdeps;
-  exec_unit_t *next;
-};
-
-struct qbinfo {
-  int nexecunits, maxexecunits;
-  // int cmdc;
-  // const char **cmdv;
-  qb_command_t cmd;
-  exec_unit_t *head, *tail;
-
-  void *ud;
-  apr_pool_t *logpool;
-  apr_file_t *logstderr, *logfile;
-  qbuild_log_fn_t *logfn;
-  bool isrelease;
-};
-typedef struct qbinfo qbinfo_t;
-
-struct catch {
-  jmp_buf env;
-  apr_pool_t *pool;
-};
-typedef struct catch catch_t;
-
-struct node {
-  qbinfo_t *qbinfo;
-  step_type_t type;
-  apr_pool_t *pool;
-  catch_t *catch;
-};
-
-#define STREAM_CHUNK_NBYTES 1024
-struct stream_chunk {
-  char *buf;
-  apr_size_t n;
-};
-typedef struct stream_chunk stream_chunk_t;
 
 /*
 struct step_core {
@@ -226,110 +152,6 @@ void print_args(const char *pre, const char *const *argv) {
 }
 */
 
-int arg_map_combine_do_callback_fn_t(void *rec, const void *key,
-                                     apr_ssize_t klen, const void *value) {
-  arg_map_t *dst = rec;
-  if (key)
-    apr_hash_set(dst->hash, key, klen, (void *)1);
-  return 1;
-}
-
-int arg_list_append_map_do_callback_fn_t(void *rec, const void *key,
-                                         apr_ssize_t klen, const void *value) {
-  arg_list_t *dst = rec;
-  if (key)
-    APR_ARRAY_PUSH(dst->arr, char *) = (char *)key;
-  return 1;
-}
-
-void arg_list_vadd(arg_list_t *args, apr_pool_t *pool, va_list ap) {
-  if (args->arr == NULL) {
-    args->id = 0x80 | 'l';
-    args->arr = apr_array_make(pool, 8, sizeof(char *));
-  }
-
-  const char *s;
-  while ((s = va_arg(ap, const char *)) != NULL) {
-    if (s == NULL)
-      continue;
-
-    uint8_t id = s[0];
-    switch (id) {
-    case 0:
-      // fprintf(stderr, "tried adding empty string to arg list\n");
-      break;
-    case (0x80 | 'l'): {
-      arg_list_t *in = (arg_list_t *)s;
-      if (in->arr) {
-        for (int e = 0; e < in->arr->nelts; ++e) {
-          const char *newarg = APR_ARRAY_IDX(in->arr, e, const char *);
-          APR_ARRAY_PUSH(args->arr, const char *) = apr_pstrdup(pool, newarg);
-        }
-      }
-    } break;
-    case (0x80 | 'm'): {
-      arg_map_t *in = (arg_map_t *)s;
-      apr_hash_do(arg_list_append_map_do_callback_fn_t, args, in->hash);
-    } break;
-    default: {
-      APR_ARRAY_PUSH(args->arr, const char *) = apr_pstrdup(pool, s);
-    } break;
-    }
-  }
-}
-
-void arg_list_add(arg_list_t *args, apr_pool_t *pool, ...) {
-  va_list ap;
-  va_start(ap, pool);
-  arg_list_vadd(args, pool, ap);
-  va_end(ap);
-}
-
-void arg_map_vadd(arg_map_t *args, apr_pool_t *pool, va_list ap) {
-  if (args->hash == NULL) {
-    args->id = 0x80 | 'm';
-    args->hash = apr_hash_make(pool);
-  }
-
-  const char *s;
-  while ((s = va_arg(ap, const char *)) != NULL) {
-    if (s == NULL)
-      continue;
-
-    uint8_t id = s[0];
-    switch (id) {
-    case 0:
-      // fprintf(stderr, "tried adding empty string to arg map\n");
-      break;
-    case (0x80 | 'l'): {
-      arg_list_t *in = (arg_list_t *)s;
-      if (in->arr) {
-        for (int e = 0; e < in->arr->nelts; e++) {
-          const char *newarg = APR_ARRAY_IDX(in->arr, e, const char *);
-          apr_hash_set(args->hash, apr_pstrdup(pool, newarg),
-                       APR_HASH_KEY_STRING, (void *)1);
-        }
-      }
-    } break;
-    case (0x80 | 'm'): {
-      arg_map_t *in = (arg_map_t *)s;
-      apr_hash_do(arg_map_combine_do_callback_fn_t, args, in->hash);
-    } break;
-    default:
-      apr_hash_set(args->hash, apr_pstrdup(pool, s), APR_HASH_KEY_STRING,
-                   (void *)1);
-      break;
-    }
-  }
-}
-
-void arg_map_add(arg_map_t *args, apr_pool_t *pool, ...) {
-  va_list ap;
-  va_start(ap, pool);
-  arg_map_vadd(args, pool, ap);
-  va_end(ap);
-}
-
 apr_time_t get_mtime(const char *path, apr_pool_t *pool) {
   apr_finfo_t finfo;
   apr_status_t rc = apr_stat(&finfo, path, APR_FINFO_MTIME, pool);
@@ -395,30 +217,36 @@ node_t subnode_create(node_t parent, apr_size_t sz) {
 }
 
 void node_include_subdir(node_t node, const char *path) {
-  src_step_t build_c = src_create(node, "build.c");
-  src_add_args(build_c, "-g");
-  linkable_t build_obj = src_compile(build_c);
-
-  so_step_t build_so_step =
-      so_create(node, apr_pstrcat(node->pool, path, "/", "build.so", NULL));
-  so_add_libs(build_so_step, "qbuild");
-  so_add_linkables(build_so_step, build_obj);
-  so_file_t build_so = so_link(build_so_step);
-
-  /*
-  src_destroy(build_c);
-  linkable_destroy(build_obj);
-  so_destroy(build_so_step);
-  */
-
-  // for (int i = 0; i < node->qbinfo->cmdc; ++i) {
-  // if (strcmp(node->qbinfo->cmdv[i], "build") == 0) {
   if (node->qbinfo->cmd == QB_BUILD) {
+    src_step_t build_c = src_create(node, "build.c");
+    src_add_args(build_c, "-g");
+    linkable_t build_obj = src_compile(build_c);
+
+    so_step_t build_so_step =
+        so_create(node, apr_pstrcat(node->pool, path, "/", "build.so", NULL));
+    so_add_libs(build_so_step, "qbuild");
+    so_add_linkables(build_so_step, build_obj);
+    so_file_t build_so = so_link(build_so_step);
+
     node_t subnode = subnode_create(node, sizeof(node_t));
     so_run_build(build_so, subnode);
-    /*} else if (strcmp(node->qbinfo->cmdv[i], "test") == 0) {
-      node_t *subnode = subnode_create(node, sizeof(node_t));
-      so_run_tests(build_so, subnode);*/
+  } else if (node->qbinfo->cmd == QB_TEST) {
+    const char *dirpath =
+        apr_pstrcat(node->pool, path, "/build_cache/tests/", NULL);
+
+    apr_dir_t *dir;
+    apr_dir_open(&dir, dirpath, node->pool);
+
+    apr_status_t s;
+    apr_finfo_t finfo;
+    while ((s = apr_dir_read(&finfo, APR_FINFO_NAME, dir)) == APR_SUCCESS) {
+      if (finfo.name[0] != '.') {
+        fprintf(stderr, "Test %s\n", finfo.name);
+        so_file_t file =
+            so_import(node, apr_pstrcat(node->pool, dirpath, finfo.name, NULL));
+        so_run_tests(file, file);
+      }
+    }
   } else {
     qbuild_logf(node, "Unknown command %d\n", node->qbinfo->cmd);
   }
@@ -426,317 +254,17 @@ void node_include_subdir(node_t node, const char *path) {
   // }
 }
 
-void exec_unit_push(exec_unit_t *unit) {
-  qbinfo_t *qbinfo = unit->parent->qbinfo;
-  if (qbinfo->head == NULL) {
-    qbinfo->head = unit;
-  } else {
-    qbinfo->tail->next = unit;
-  }
-  qbinfo->tail = unit;
-}
-
-exec_unit_t *exec_unit_pop(qbinfo_t *qbinfo) {
-  if (qbinfo->head == NULL)
-    return NULL;
-  exec_unit_t *ret = qbinfo->head;
-  qbinfo->head = qbinfo->head->next;
-  if (qbinfo->head == NULL)
-    qbinfo->tail = NULL;
-  return ret;
-}
-
-apr_size_t exec_unit_io_update_single(apr_file_t *pipe,
-                                      apr_array_header_t *buffer) {
-  apr_size_t n, total = 0;
-  int rc;
-  do {
-    stream_chunk_t *chunk =
-        &APR_ARRAY_IDX(buffer, buffer->nelts - 1, stream_chunk_t);
-    n = STREAM_CHUNK_NBYTES - chunk->n;
-    if (n == 0) {
-      n = STREAM_CHUNK_NBYTES;
-      chunk = &APR_ARRAY_PUSH(buffer, stream_chunk_t);
-      chunk->buf = apr_palloc(buffer->pool, STREAM_CHUNK_NBYTES);
-      chunk->n = 0;
-    }
-    rc = apr_file_read(pipe, chunk->buf, &n);
-    if (rc == APR_SUCCESS) {
-      total += n;
-      chunk->n += n;
-    }
-    // if (rc == APR_EOF)
-    // qbuild_logf(node, "EOF Found!\n");
-  } while (rc == APR_SUCCESS);
-  return total;
-}
-
-void exec_unit_io_update(exec_unit_t *unit) {
-  unit->stdout_total +=
-      exec_unit_io_update_single(unit->proc.out, unit->stdout_buffer);
-  unit->stderr_total +=
-      exec_unit_io_update_single(unit->proc.err, unit->stderr_buffer);
-}
-
-void exec_unit_maint(int reason, void *ud, int code);
-void exec_check_rdeps(exec_unit_t *node);
-void exec_unit_flush(qbinfo_t *qbinfo);
-
-void exec_unit_run(exec_unit_t *unit) {
-  /*
-  apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
-  qbuild_logf(node, "nexecunits: %d | maxexecunits %d\n",
-  unit->parent->qbinfo->nexecunits, unit->parent->qbinfo->maxexecunits); while
-  (unit->parent->qbinfo->nexecunits >= unit->parent->qbinfo->maxexecunits) {
-    apr_sleep(500);
-    apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
-  }
-  */
-
-  arg_list_t *args = unit->build_args(unit->parent, unit->baton);
-  unit->cmdline = apr_array_pstrcat(unit->pool, args->arr, ' ');
-  const char **null_elt = apr_array_push(args->arr);
-  *null_elt = NULL;
-  const char *const *argv = (const char *const *)args->arr->elts;
-
-  if (unit->status == EXEC_UNIT_SKIPPED) {
-    qbuild_logf(unit->parent, "Skip: %s %pp\n", unit->cmdline, unit);
-    unit->processed = true;
-    exec_check_rdeps(unit);
-  } else {
-    unit->status = EXEC_UNIT_RUNNING;
-    qbuild_logf(unit->parent, "Exec: %s %pp\n", unit->cmdline, unit);
-
-    apr_procattr_t *procattr;
-    apr_procattr_create(&procattr, unit->pool);
-    apr_procattr_cmdtype_set(procattr, APR_PROGRAM_PATH);
-    apr_procattr_io_set(procattr, APR_NO_PIPE, APR_CHILD_BLOCK,
-                        APR_CHILD_BLOCK);
-    apr_proc_create(&unit->proc, argv[0], argv, NULL, procattr, unit->pool);
-    apr_proc_other_child_register(&unit->proc, exec_unit_maint, unit,
-                                  unit->proc.out, unit->pool);
-
-    stream_chunk_t *chunk;
-    unit->stdout_buffer = apr_array_make(unit->pool, 1, sizeof(stream_chunk_t));
-    chunk = &APR_ARRAY_PUSH(unit->stdout_buffer, stream_chunk_t);
-    chunk->buf = apr_palloc(unit->pool, STREAM_CHUNK_NBYTES);
-    chunk->n = 0;
-    unit->stdout_total = 0;
-    unit->stderr_buffer = apr_array_make(unit->pool, 1, sizeof(stream_chunk_t));
-    chunk = &APR_ARRAY_PUSH(unit->stderr_buffer, stream_chunk_t);
-    chunk->buf = apr_palloc(unit->pool, STREAM_CHUNK_NBYTES);
-    chunk->n = 0;
-    unit->stderr_total = 0;
-    unit->parent->qbinfo->nexecunits += 1;
-  }
-}
-
-void exec_add_dep(exec_unit_t *node, exec_unit_t *dep) {
-  // qbuild_assert(node, node->parent);
-  qbuild_assert(dep, node->parent);
-
-  if (node->deps == NULL)
-    node->deps = apr_array_make(node->pool, 4, sizeof(node_t *));
-
-  if (dep->rdeps == NULL)
-    dep->rdeps = apr_array_make(dep->pool, 4, sizeof(node_t *));
-
-  *(exec_unit_t **)apr_array_push(node->deps) = dep;
-  *(exec_unit_t **)apr_array_push(dep->rdeps) = node;
-}
-
-void exec_unit_flush(qbinfo_t *qbinfo) {
-  while (qbinfo->nexecunits < qbinfo->maxexecunits) {
-    exec_unit_t *torun = exec_unit_pop(qbinfo);
-    if (torun) {
-      qbinfo_logf(qbinfo, "Run from head\n");
-      exec_unit_run(torun);
-    } else
-      break;
-  }
-}
-
-void exec_check_deps(exec_unit_t *unit) {
-  exec_unit_flush(unit->parent->qbinfo);
-  qbuild_logf(unit->parent, "Check deps for %pp\n", unit->parent);
-  if (unit && unit->deps) {
-    for (int d = 0; d < unit->deps->nelts; ++d) {
-      exec_unit_t *dep = APR_ARRAY_IDX(unit->deps, d, exec_unit_t *);
-      if (dep->processed == false)
-        return;
-    }
-  }
-
-  if (unit->queued)
-    return;
-  unit->queued = true;
-
-  qbinfo_t *qbinfo = unit->parent->qbinfo;
-  if (qbinfo->nexecunits < qbinfo->maxexecunits) {
-    if (qbinfo->head) {
-      qbinfo_logf(qbinfo, "Run from head\n");
-      exec_unit_run(exec_unit_pop(qbinfo));
-    } else {
-      qbinfo_logf(qbinfo, "Run current\n");
-      exec_unit_run(unit);
-    }
-  } else {
-    qbinfo_logf(qbinfo, "Push to tail\n");
-    exec_unit_push(unit);
-  }
-}
-
-void exec_check_rdeps(exec_unit_t *node) {
-  // qbuild_assert(node, node->parent);
-  exec_unit_flush(node->parent->qbinfo);
-  qbuild_logf(node->parent, "Check rdeps for %pp\n", node->parent);
-  if (node->rdeps) {
-    for (int r = 0; r < node->rdeps->nelts; ++r) {
-      exec_unit_t *rdep = APR_ARRAY_IDX(node->rdeps, r, exec_unit_t *);
-      exec_check_deps(rdep);
-    }
-  }
-}
-
-void log_chunk_by_line(stream_chunk_t *chunk, node_t node) {
-  qbuild_logf(node, "%.*s", chunk->n, chunk->buf);
-}
-
-void exec_unit_maint(int reason, void *ud, int code) {
-  exec_unit_t *unit = ud;
-  switch (reason) {
-  case APR_OC_REASON_RUNNING:
-    exec_unit_io_update(unit);
-    break;
-  case APR_OC_REASON_UNREGISTER:
-    // qbuild_logf(node, "unreg %pp\n", unit);
-    return;
-  case APR_OC_REASON_DEATH:
-  case APR_OC_REASON_LOST:
-    unit->parent->qbinfo->nexecunits -= 1;
-    qbuild_logf(unit->parent, "Completed: %pp\n", unit);
-    exec_unit_io_update(unit);
-    apr_proc_other_child_unregister(unit);
-    if (code == 0) {
-      unit->status = EXEC_UNIT_SUCCESS;
-      unit->process(unit->parent, unit->baton);
-      unit->processed = true;
-      exec_check_rdeps(unit);
-    } else {
-      unit->status = EXEC_UNIT_FAILURE;
-      qbuild_logf(unit->parent, "Failed with code %d\n", code);
-      qbuild_logf(unit->parent, "CMD: %s\n", unit->cmdline);
-      if (unit->stdout_buffer && unit->stdout_buffer->nelts > 0 &&
-          unit->stdout_total > 0) {
-        for (int e = 0; e < unit->stdout_buffer->nelts; ++e) {
-          stream_chunk_t *chunk =
-              &APR_ARRAY_IDX(unit->stdout_buffer, e, stream_chunk_t);
-          log_chunk_by_line(chunk, unit->parent);
-        }
-        qbuild_logf(unit->parent, "\n");
-      }
-      if (unit->stderr_buffer && unit->stderr_buffer->nelts > 0 &&
-          unit->stderr_total > 0) {
-        for (int e = 0; e < unit->stderr_buffer->nelts; ++e) {
-          stream_chunk_t *chunk =
-              &APR_ARRAY_IDX(unit->stderr_buffer, e, stream_chunk_t);
-          log_chunk_by_line(chunk, unit->parent);
-        }
-        qbuild_logf(unit->parent, "\n");
-      }
-      qbuild_throw(unit->parent, code);
-    }
-    break;
-  }
-  if (reason != APR_OC_REASON_RUNNING) {
-    // qbuild_logf(node, "MAINT CALLED!!! %d %d %pp\n", reason, code, ud);
-  }
-}
-
-void exec_unit_mark_skip(exec_unit_t *unit) {
-  unit->status = EXEC_UNIT_SKIPPED;
-}
-
-exec_unit_t *exec_unit_init(node_t node, process_fn_t process,
-                            build_args_fn_t build_args) {
-  apr_pool_t *pool;
-  apr_pool_create(&pool, node->pool);
-  exec_unit_t *unit = apr_pcalloc(pool, sizeof(*unit));
-  unit->pool = pool;
-  unit->parent = node;
-  unit->build_args = build_args;
-  unit->process = process;
-
-  return unit;
-}
-
-void exec_unit_set_baton(exec_unit_t *unit, void *baton) {
-  unit->baton = baton;
-}
-
-void exec_unit_submit(exec_unit_t *unit) {
-  if (unit->queued) // Not necessary, but shortcuts checking
-    return;
-  exec_check_deps(unit); //
-}
-
-void exec_unit_wait(exec_unit_t *unit) {
-  if (unit->status == EXEC_UNIT_SKIPPED)
-    return;
-
-  apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
-  while (unit->status == EXEC_UNIT_RUNNING) {
-    apr_sleep(500);
-    apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
-    exec_unit_flush(unit->parent->qbinfo);
-  }
-}
-
-int qbuild_is_done(node_t node) {
-  return !(node->qbinfo->nexecunits > 0 || node->qbinfo->head != NULL);
-}
-
-void qbuild_update_once(node_t node) {
-  apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
-  exec_unit_flush(node->qbinfo);
-}
-
-void qbuild_wait_all(node_t node) {
-  // apr_proc_other_child_refresh_all(APR_OC_REASON_RUNNING);
-  qbuild_update_once(node);
-  qbuild_logf(node, "Waiting on all...\n");
-  qbuild_logf(node, "nexecunits: %d | maxexecunits %d\n",
-              node->qbinfo->nexecunits, node->qbinfo->maxexecunits);
-  while (!qbuild_is_done(node)) {
-    apr_sleep(500);
-    qbuild_update_once(node);
-  }
-}
-
-void exec_unit_destroy(exec_unit_t *unit) {
-  apr_pool_destroy(unit->pool); //
-}
-
-void pcdep_process(node_t node, void *vbaton) {
+void pcdep_process(node_t node, void *vbaton, int len, char *str) {
   pcdep_t dep = (pcdep_t)node;
   pcdep_baton_t *baton = vbaton;
   exec_unit_t *unit = baton->exec_unit;
-  char *output = apr_palloc(unit->pool, unit->stdout_total + 1);
-
-  int total = 0;
-  for (int i = 0; i < unit->stdout_buffer->nelts; i++) {
-    stream_chunk_t *elt = &((stream_chunk_t *)unit->stdout_buffer->elts)[i];
-    memmove(&output[total], elt->buf, elt->n);
-    total += elt->n;
-  }
-  output[total] = '\0';
 
   char *saveptr = NULL;
   char *token;
 
   // arg_list_init(&baton->args_out, dep->node.pool);
   const char *seps = " \n\r\t";
-  for (token = apr_strtok(output, seps, &saveptr); token != NULL;
+  for (token = apr_strtok(str, seps, &saveptr); token != NULL;
        token = apr_strtok(NULL, seps, &saveptr)) {
     arg_list_add(&baton->args_out, dep->node.pool, token, NULL);
     // const char **elt = apr_array_push(pcargs);
@@ -842,7 +370,7 @@ arg_list_t *src_build_args(node_t node, void *vbaton) {
   return &step->args;
 }
 
-void src_process(node_t node, void *vbaton) {
+void src_process(node_t node, void *vbaton, int len, char *str) {
   linkable_t file = vbaton;
   file->mtime = get_mtime(file->path, file->node.pool);
 }
@@ -903,7 +431,7 @@ linkable_t src_compile(src_step_t step) {
 
   linkable_t file = (void *)subnode_create(&step->node, sizeof(*file));
 
-  file->node.type = STEP_OBJFILE;
+  // file->node.type = STEP_OBJFILE;
 
   file->path = apr_pstrdup(file->node.pool, step->compiled_path);
   file->exec_unit = step->exec_unit;
@@ -939,7 +467,7 @@ void linkable_destroy(linkable_t *file) {
 
 linkable_t ar_import(node_t node, const char *path) {
   linkable_t file = (void *)subnode_create(node, sizeof(*file));
-  file->node.type = STEP_ARFILE;
+  // file->node.type = STEP_ARFILE;
 
   file->path = apr_pstrdup(file->node.pool, path);
   return file;
@@ -1023,7 +551,7 @@ arg_list_t *exe_build_args(node_t node, void *vbaton) {
   return &step->args;
 }
 
-void exe_process(node_t node, void *vbaton) {
+void exe_process(node_t node, void *vbaton, int len, char *str) {
   // Does nothing
 }
 
@@ -1092,13 +620,9 @@ void _so_add_args(so_step_t step, ...) {
 void _so_add_libs(so_step_t step, ...) {
   va_list ap;
   va_start(ap, step);
-  // if (step->libs_args.hash == NULL)
-  // arg_map_init(&step->libs_args, step->node.pool);
 
   const char *s;
   while ((s = va_arg(ap, const char *)) != NULL) {
-    // apr_hash_set(step->libs_args, apr_pstrcat(step->node.pool, "-l", s,
-    // NULL), APR_HASH_KEY_STRING, (void *)1);
     arg_map_add(&step->libs_args, step->node.pool,
                 apr_pstrcat(step->node.pool, "-l", s, NULL), NULL);
   }
@@ -1113,7 +637,7 @@ arg_list_t *so_build_args(node_t node, void *vbaton) {
   return &step->args;
 }
 
-void so_process(node_t node, void *vbaton) {
+void so_process(node_t node, void *vbaton, int len, char *str) {
   so_file_t outfile = vbaton;
   outfile->mtime = get_mtime(outfile->soname, outfile->node.pool);
 }
@@ -1130,6 +654,16 @@ so_step_t so_create(node_t node, const char *soname) {
   step->exec_unit = exec_unit_init(&step->node, so_process, so_build_args);
 
   return step;
+}
+
+so_file_t so_import(node_t node, const char *path) {
+  so_file_t file = (void *)subnode_create(node, sizeof(*file));
+  // file->node.type = STEP_SOFILE;
+
+  file->soname = apr_pstrdup(file->node.pool, path);
+  file->mtime = get_mtime(file->soname, file->node.pool);
+
+  return file;
 }
 
 void _so_add_linkables(so_step_t step, ...) {
@@ -1149,7 +683,6 @@ so_file_t so_link(so_step_t step) {
 
   so_file_t outfile = (so_file_t)subnode_create(&step->node, sizeof(*outfile));
 
-  outfile->dso = NULL;
   outfile->soname = apr_pstrdup(outfile->node.pool, step->soname);
   outfile->exec_unit = step->exec_unit;
 
@@ -1210,12 +743,16 @@ void *so_load_sym(so_file_t file, const char *sym) {
   void *ret = NULL;
   int rv = apr_dso_sym(&ret, file->dso, sym);
   if (rv != APR_SUCCESS) {
-    char errbuf[256];
-    apr_dso_error(file->dso, errbuf, sizeof(errbuf));
-    qbuild_logf(&file->node, "dso_sym failed: %s\n", errbuf);
-    qbuild_throw(&file->node, -1);
+    return NULL;
   }
   return ret;
+}
+
+void so_load_throw(so_file_t file) {
+  char errbuf[256];
+  apr_dso_error(file->dso, errbuf, sizeof(errbuf));
+  qbuild_logf(&file->node, "dso_sym failed: %s\n", errbuf);
+  qbuild_throw(&file->node, -1);
 }
 
 typedef void (*build_fn_t)(void *);
@@ -1226,6 +763,8 @@ void so_run_build(so_file_t file, void *arg) {
 
   qbuild_logf(&file->node, "Building %s\n", file->soname);
   build_fn_t build_fn = so_load_sym(file, "build");
+  if (build_fn == NULL)
+    so_load_throw(file);
 
   build_fn(arg);
 }
@@ -1236,6 +775,9 @@ void so_run_tests(so_file_t file, void *arg) {
 
   test_func_t *start_tests = so_load_sym(file, "__start_test_array"),
               *stop_tests = so_load_sym(file, "__stop_test_array");
+
+  if (start_tests == NULL || stop_tests == NULL)
+    return;
 
   qbuild_logf(&file->node, "Main: Triggering test suite in %s...\n",
               file->soname);

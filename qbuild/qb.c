@@ -40,12 +40,21 @@ int main(int argc, const char *argv[]) {
     return 1;
   }
 
-  if (flags.help || os->ind == os->argc) {
-    printf("Usage: %s\n", argv[0]);
-    return 0;
+  if (os->argc - os->ind == 1) {
+    if (strcmp(os->argv[os->ind], "build") == 0)
+      flags.cmd = QB_BUILD;
+    else if (strcmp(os->argv[os->ind], "test") == 0)
+      flags.cmd = QB_TEST;
+    else
+      flags.help = true;
+  } else {
+    flags.help = true;
   }
 
-  flags.cmd = QB_BUILD;
+  if (flags.help) {
+    printf("Usage: %s [build|test]\n", argv[0]);
+    return 0;
+  }
 
   node_t node;
   int rc = setjmp(*(jmp_buf *)root_node_create(&node, NULL, flags.cmd));

@@ -58,6 +58,8 @@ void exe_link(exe_step_t step);
 // Shared objects
 so_step_t so_create(node_t node, const char *soname);
 
+so_file_t so_import(node_t node, const char *path);
+
 #define so_add_args(step, ...) _so_add_args(step, __VA_ARGS__, 0)
 void _so_add_args(so_step_t step, ...);
 
