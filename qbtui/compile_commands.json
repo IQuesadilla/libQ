@@ -1,0 +1,20 @@
+[
+  {
+    "arguments": [
+      "/usr/lib64/ccache/gcc",
+      "-c",
+      "-DLINUX",
+      "-D_REENTRANT",
+      "-D_GNU_SOURCE",
+      "-I/usr/include/apr-1",
+      "-D_DEFAULT_SOURCE",
+      "-D_XOPEN_SOURCE=600",
+      "-o",
+      "qbtui",
+      "qbtui.c"
+    ],
+    "directory": "/home/iquezada/Code/libQ/qbtui",
+    "file": "/home/iquezada/Code/libQ/qbtui/qbtui.c",
+    "output": "/home/iquezada/Code/libQ/qbtui/qbtui"
+  }
+]

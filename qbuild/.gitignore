@@ -1,0 +1,4 @@
+libqbuild.so
+qb
+compile_commands.json
+.clangd
