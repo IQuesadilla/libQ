@@ -1,0 +1,17 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-DLINUX",
+      "-D_REENTRANT",
+      "-D_GNU_SOURCE",
+      "-I/usr/include/apr-1.0",
+      "-I",
+      "../qbuild/",
+      "qinit.c"
+    ],
+    "directory": "/home/iquezada/Code/libQ/qinit",
+    "file": "/home/iquezada/Code/libQ/qinit/qinit.c"
+  }
+]
