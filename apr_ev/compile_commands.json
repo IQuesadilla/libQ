@@ -1,0 +1,19 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-DLINUX",
+      "-D_REENTRANT",
+      "-D_GNU_SOURCE",
+      "-I/usr/include/apr-1",
+      "-I",
+      "/work/root/include",
+      "-I",
+      ".",
+      "libaprev.c"
+    ],
+    "directory": "/work/libQ/apr_ev",
+    "file": "/work/libQ/apr_ev/libaprev.c"
+  }
+]

@@ -41,7 +41,8 @@ struct qbinfo {
   void *ud;
   apr_pool_t *logpool;
   apr_file_t *logstderr, *logfile;
-  qbuild_log_fn_t *logfn;
+  // qbuild_log_fn_t *logfn;
+  qb_disp_cmds_t disp;
   bool isrelease;
 };
 typedef struct qbinfo qbinfo_t;

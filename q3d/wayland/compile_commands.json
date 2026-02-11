@@ -1,0 +1,36 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-I/usr/local/include",
+      "-I",
+      "/work/root/include",
+      "-I",
+      ".",
+      "-o",
+      "wayland_gl.app",
+      "main.c"
+    ],
+    "directory": "/work/libQ/q3d/wayland",
+    "file": "/work/libQ/q3d/wayland/main.c",
+    "output": "/work/libQ/q3d/wayland/wayland_gl.app"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-I/usr/local/include",
+      "-I",
+      "/work/root/include",
+      "-I",
+      ".",
+      "-o",
+      "wayland_gl.app",
+      "xdg-shell-protocol.c"
+    ],
+    "directory": "/work/libQ/q3d/wayland",
+    "file": "/work/libQ/q3d/wayland/xdg-shell-protocol.c",
+    "output": "/work/libQ/q3d/wayland/wayland_gl.app"
+  }
+]

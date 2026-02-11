@@ -164,13 +164,17 @@ void qbuild_log_stderr(node_t node) {
   apr_file_open_stderr(&node->qbinfo->logstderr, node->qbinfo->logpool);
 }
 
+void qbuild_set_disp_cmds(node_t root_node, qb_disp_cmds_t *cmds) {
+  root_node->qbinfo->disp = *cmds;
+}
+
 void qbuild_log_file(node_t node, const char *path) {
   apr_file_open(&node->qbinfo->logfile, path, APR_FOPEN_WRITE,
                 APR_FPROT_OS_DEFAULT, node->qbinfo->logpool);
 }
 
-void qbuild_log_fn(node_t node, qbuild_log_fn_t *fn, void *ud) {
-  node->qbinfo->logfn = fn;
+void qbuild_log_fn(node_t node, qbuild_log_fn_t fn, void *ud) {
+  node->qbinfo->disp.qb_log_fn = fn;
   node->qbinfo->ud = ud;
 }
 
@@ -180,8 +184,8 @@ void qbuild_vlogf(qbinfo_t *qbinfo, const char *fmt, va_list ap) {
     apr_file_puts(out, qbinfo->logstderr);
   if (qbinfo->logfile)
     apr_file_puts(out, qbinfo->logfile);
-  if (qbinfo->logfn)
-    qbinfo->logfn(out, qbinfo->ud);
+  if (qbinfo->disp.qb_log_fn)
+    qbinfo->disp.qb_log_fn(out, qbinfo->ud);
 }
 
 void qbinfo_logf(qbinfo_t *qbinfo, const char *fmt, ...) {

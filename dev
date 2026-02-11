@@ -1,0 +1,7 @@
+#!/bin/sh
+podman run -it --rm \
+  --userns=keep-id \
+  -v "$PWD:/work:Z" \
+  -w /work \
+  cdev:fedora
+

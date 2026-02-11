@@ -6,16 +6,13 @@ libqbuild.so: qbuild.c qbuild.h test/build.c
 	gcc -shared -g -o libqbuild.so /tmp/qbuild.o /tmp/qexec.o `pkg-config apr-1 --libs`
 
 qb: libqbuild.so qb.c
-	gcc qb.c -o qb -g -lqbuild `pkg-config apr-1 --cflags --libs`
+	gcc qb.c -o qb -g -lqbuild -L/work/root/lib/ `pkg-config apr-1 --cflags --libs`
 
 install: libqbuild.so
-	sudo mkdir -p /usr/local/lib
-	sudo mkdir -p /usr/local/include
-	sudo cp libqbuild.so /usr/local/lib/
-	sudo cp qbuild.h /usr/local/include/
-	sudo cp qtest.h /usr/local/include/
-	sudo cp qb.h /usr/local/include/
+	cp libqbuild.so /work/root/lib/
+	cp qbuild.h /work/root/include/
+	cp qtest.h /work/root/include/
+	cp qb.h /work/root/include/
 
 qbinstall: qb
-	sudo mkdir -p /usr/local/bin
-	sudo cp qb /usr/local/bin/
+	cp qb /work/root/bin/
