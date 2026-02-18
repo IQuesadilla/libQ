@@ -1,8 +1,10 @@
+#include "apr_events.h"
+
 #include <apr.h>
 #include <apr_general.h>
 #include <apr_poll.h>
 
-typedef apr_status_t (*apr_event_cb_t)(void *descriptor);
+typedef apr_status_t (*apr_event_cb_t)(void *descriptor, void *ud);
 
 struct apr_event {
   apr_event_cb_t fn;
@@ -10,35 +12,51 @@ struct apr_event {
 };
 typedef struct apr_event apr_event_t;
 
+struct apr_loop {
+  apr_pollcb_t *pcb;
+};
+
 static apr_status_t internal_run(void *baton, apr_pollfd_t *pfd) {
   apr_event_t *ev = pfd->client_data;
   if (pfd->desc_type == APR_POLL_FILE)
-    return ev->fn(pfd->desc.f);
+    return ev->fn(pfd->desc.f, ev->ud);
   else if (pfd->desc_type == APR_POLL_SOCKET)
-    return ev->fn(pfd->desc.s);
+    return ev->fn(pfd->desc.s, ev->ud);
   else
     fprintf(stderr, "NO EVENT TYPE\n");
   return APR_EINVAL;
 }
 
-void apr_event_add_file(apr_pollcb_t *pcb, apr_pool_t *pool) {
+void apr_event_add_file(apr_loop_t *loop, apr_pool_t *pool, int reqevents,
+                        apr_event_file_cb_t fn, void *ud) {
   apr_event_t *ev = apr_palloc(pool, sizeof(*ev));
+  *ev = (apr_event_t){
+      .fn = (apr_event_cb_t)fn,
+      .ud = ud,
+  };
+
   apr_pollfd_t *pfd = apr_palloc(pool, sizeof(*pfd));
   *pfd = (apr_pollfd_t){
-      .desc_type = APR_POLL_SOCKET,
+      .desc_type = APR_POLL_FILE,
       .desc.s = NULL,
       .client_data = ev,
       .p = pool,
-      .reqevents = APR_POLLIN,
+      .reqevents = reqevents,
   };
 
-  apr_pollcb_add(pcb, pfd);
+  apr_pollcb_add(loop->pcb, pfd);
 }
 
-void apr_event_run(apr_pollcb_t *pcb) {
-  apr_pollcb_poll(pcb, -1, internal_run, NULL);
+void apr_event_run(apr_loop_t *loop) {
+  apr_pollcb_poll(loop->pcb, -1, internal_run, NULL);
 }
 
+void apr_event_setup(apr_loop_t **loop, apr_pool_t *pool) {
+  *loop = apr_palloc(pool, sizeof(**loop));
+  apr_pollcb_create(&(*loop)->pcb, 16, pool, 0);
+}
+
+/*
 int main(int argc, char *argv[]) {
   apr_initialize();
 
@@ -54,3 +72,4 @@ int main(int argc, char *argv[]) {
 
   apr_terminate();
 }
+*/

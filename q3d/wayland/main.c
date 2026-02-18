@@ -4,19 +4,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <poll.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include <EGL/egl.h>
 #include <GLES2/gl2.h>
+
+#include <apr.h>
+#include <apr_general.h>
+#include <apr_pools.h>
+
 #include <cglm/cglm.h>
-#include <wayland-client.h>
-#include <wayland-egl.h>
-#include <xkbcommon/xkbcommon.h>
 
 #include <qcam.h>
-
-#include "xdg-shell-client-protocol.h"
+#include <qwindow.h>
 
 static const char basic_colored_vert[] = "\
 attribute vec3 aPos; \n\
@@ -174,28 +175,7 @@ static const float colorData[] = {
 };
 
 struct app {
-  struct wl_display *display;
-  struct wl_registry *registry;
-  struct wl_compositor *compositor;
-  struct wl_surface *surface;
-
-  struct wl_seat *seat;
-  struct wl_pointer *pointer;
-  struct wl_keyboard *keyboard;
-
-  struct xdg_wm_base *wm_base;
-  struct xdg_surface *xdg_surface;
-  struct xdg_toplevel *toplevel;
-
-  struct xkb_context *xkb_ctx;
-  struct xkb_keymap *keymap;
-  struct xkb_state *xkb_state;
-
-  struct wl_egl_window *egl_window;
-  EGLDisplay egl_display;
-  EGLContext egl_context;
-  EGLSurface egl_surface;
-
+  qwindow_t *win;
   qcam_t cam;
 
   struct {
@@ -205,13 +185,11 @@ struct app {
     } overlay;
     struct {
       GLuint ProgID, PosVBO, ColorVBO;
-      GLint modelLoc, viewLoc, projLoc;
+      GLint PosLoc, ColorLoc, modelLoc, viewLoc, projLoc;
     } cube;
   } shaders;
 
   int width, height;
-  float mpos_x, mpos_y;
-  bool configured;
 };
 
 bool checkCompileErrors(GLuint shader, bool isprogram, char *type) {
@@ -271,246 +249,7 @@ int LoadShader(const char *vertex_source, const char *fragment_source) {
   return programID;
 }
 
-static void pointer_enter(void *data, struct wl_pointer *pointer,
-                          uint32_t serial, struct wl_surface *surface,
-                          wl_fixed_t sx, wl_fixed_t sy) {
-  (void)pointer;
-  (void)serial;
-  (void)surface;
-  printf("Pointer entered at %.1f %.1f\n", wl_fixed_to_double(sx),
-         wl_fixed_to_double(sy));
-}
-
-static void pointer_leave(void *data, struct wl_pointer *pointer,
-                          uint32_t serial, struct wl_surface *surface) {
-  printf("Pointer left\n");
-}
-
-static void pointer_motion(void *data, struct wl_pointer *pointer,
-                           uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
-  struct app *app = data;
-  // printf("Motion %.1f %.1f\n", wl_fixed_to_double(sx),
-  // wl_fixed_to_double(sy));
-  app->mpos_x = wl_fixed_to_double(sx);
-  app->mpos_y = wl_fixed_to_double(sy);
-}
-
-static void pointer_button(void *data, struct wl_pointer *pointer,
-                           uint32_t serial, uint32_t time, uint32_t button,
-                           uint32_t state) {
-  printf("Button %u %s\n", button,
-         state == WL_POINTER_BUTTON_STATE_PRESSED ? "pressed" : "released");
-}
-
-static void pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
-                         uint32_t axis, wl_fixed_t value) {
-  printf("Scroll %.2f\n", wl_fixed_to_double(value));
-}
-
-static const struct wl_pointer_listener pointer_listener = {
-    .enter = pointer_enter,
-    .leave = pointer_leave,
-    .motion = pointer_motion,
-    .button = pointer_button,
-    .axis = pointer_axis,
-};
-
-static void keyboard_keymap(void *data, struct wl_keyboard *keyboard,
-                            uint32_t format, int fd, uint32_t size) {
-  struct app *app = data;
-
-  char *map = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
-  app->keymap =
-      xkb_keymap_new_from_string(app->xkb_ctx, map, XKB_KEYMAP_FORMAT_TEXT_V1,
-                                 XKB_KEYMAP_COMPILE_NO_FLAGS);
-
-  munmap(map, size);
-  close(fd);
-
-  app->xkb_state = xkb_state_new(app->keymap);
-}
-
-static void keyboard_enter(void *data, struct wl_keyboard *keyboard,
-                           uint32_t serial, struct wl_surface *surface,
-                           struct wl_array *keys) {
-  (void)data;
-  (void)keyboard;
-  (void)serial;
-  (void)surface;
-  (void)keys;
-  printf("Keyboard focus entered\n");
-}
-
-static void keyboard_leave(void *data, struct wl_keyboard *keyboard,
-                           uint32_t serial, struct wl_surface *surface) {
-  (void)data;
-  (void)keyboard;
-  (void)serial;
-  (void)surface;
-  printf("Keyboard focus left\n");
-}
-
-static void keyboard_key(void *data, struct wl_keyboard *keyboard,
-                         uint32_t serial, uint32_t time, uint32_t key,
-                         uint32_t state) {
-  struct app *app = data;
-
-  if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-    xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, key + 8);
-
-    char name[64];
-    xkb_keysym_get_name(sym, name, sizeof(name));
-    printf("Key pressed: %s\n", name);
-  }
-}
-
-static void keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
-                               uint32_t serial, uint32_t mods_depressed,
-                               uint32_t mods_latched, uint32_t mods_locked,
-                               uint32_t group) {
-  struct app *app = data;
-  xkb_state_update_mask(app->xkb_state, mods_depressed, mods_latched,
-                        mods_locked, 0, 0, group);
-}
-
-static const struct wl_keyboard_listener keyboard_listener = {
-    .keymap = keyboard_keymap,
-    .enter = keyboard_enter,
-    .leave = keyboard_leave,
-    .key = keyboard_key,
-    .modifiers = keyboard_modifiers,
-};
-
-static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps) {
-  struct app *app = data;
-
-  if ((caps & WL_SEAT_CAPABILITY_POINTER) && !app->pointer) {
-    app->pointer = wl_seat_get_pointer(seat);
-    wl_pointer_add_listener(app->pointer, &pointer_listener, app);
-  }
-
-  if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !app->keyboard) {
-    app->keyboard = wl_seat_get_keyboard(seat);
-    wl_keyboard_add_listener(app->keyboard, &keyboard_listener, app);
-  }
-}
-
-static const struct wl_seat_listener seat_listener = {
-    .capabilities = seat_capabilities,
-};
-
-static void xdg_wm_base_ping(void *data, struct xdg_wm_base *wm_base,
-                             uint32_t serial) {
-  xdg_wm_base_pong(wm_base, serial);
-}
-
-static const struct xdg_wm_base_listener wm_base_listener = {
-    .ping = xdg_wm_base_ping,
-};
-
-static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
-                                  uint32_t serial) {
-  struct app *app = data;
-  xdg_surface_ack_configure(xdg_surface, serial);
-  app->configured = true;
-}
-
-static const struct xdg_surface_listener xdg_surface_listener = {
-    .configure = xdg_surface_configure,
-};
-
-static void toplevel_configure(void *data, struct xdg_toplevel *toplevel,
-                               int32_t width, int32_t height,
-                               struct wl_array *states) {
-  struct app *app = data;
-
-  if (width > 0 && height > 0) {
-    app->width = width;
-    app->height = height;
-    wl_egl_window_resize(app->egl_window, width, height, 0, 0);
-  }
-}
-
-static void toplevel_close(void *data, struct xdg_toplevel *toplevel) {
-  exit(0);
-}
-
-static const struct xdg_toplevel_listener toplevel_listener = {
-    .configure = toplevel_configure,
-    .close = toplevel_close,
-};
-
-static void registry_global(void *data, struct wl_registry *registry,
-                            uint32_t name, const char *interface,
-                            uint32_t version) {
-  struct app *app = data;
-
-  if (strcmp(interface, wl_compositor_interface.name) == 0) {
-    app->compositor =
-        wl_registry_bind(registry, name, &wl_compositor_interface, 4);
-  } else if (!strcmp(interface, wl_seat_interface.name)) {
-    app->seat = wl_registry_bind(registry, name, &wl_seat_interface, 1);
-
-    wl_seat_add_listener(app->seat, &seat_listener, app);
-
-    app->xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-  } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
-    app->wm_base = wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
-    xdg_wm_base_add_listener(app->wm_base, &wm_base_listener, app);
-  }
-}
-
-static void registry_remove(void *data, struct wl_registry *registry,
-                            uint32_t name) {
-  (void)data;
-  (void)registry;
-  (void)name;
-}
-
-static const struct wl_registry_listener registry_listener = {
-    .global = registry_global,
-    .global_remove = registry_remove,
-};
-
 static void init_egl(struct app *app) {
-  EGLint major, minor;
-  EGLint config_attribs[] = {
-      EGL_SURFACE_TYPE,
-      EGL_WINDOW_BIT,
-      EGL_RED_SIZE,
-      8,
-      EGL_GREEN_SIZE,
-      8,
-      EGL_BLUE_SIZE,
-      8,
-      EGL_RENDERABLE_TYPE,
-      EGL_OPENGL_ES2_BIT,
-      EGL_NONE,
-  };
-
-  const EGLint ctx[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
-
-  EGLConfig config;
-  EGLint n;
-
-  app->egl_display = eglGetDisplay((EGLNativeDisplayType)app->display);
-  eglInitialize(app->egl_display, &major, &minor);
-
-  eglChooseConfig(app->egl_display, config_attribs, &config, 1, &n);
-
-  eglBindAPI(EGL_OPENGL_ES_API);
-
-  app->egl_context =
-      eglCreateContext(app->egl_display, config, EGL_NO_CONTEXT, ctx);
-
-  app->egl_window = wl_egl_window_create(app->surface, app->width, app->height);
-
-  app->egl_surface = eglCreateWindowSurface(app->egl_display, config,
-                                            (uintptr_t)app->egl_window, NULL);
-
-  eglMakeCurrent(app->egl_display, app->egl_surface, app->egl_surface,
-                 app->egl_context);
-
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -550,9 +289,12 @@ static void init_egl(struct app *app) {
   }
 
   glUseProgram(CubeProgID);
-  app->shaders.cube.modelLoc = glGetAttribLocation(CubeProgID, "model");
-  app->shaders.cube.viewLoc = glGetAttribLocation(CubeProgID, "view");
-  app->shaders.cube.projLoc = glGetAttribLocation(CubeProgID, "projection");
+  app->shaders.cube.PosLoc = glGetAttribLocation(CubeProgID, "aPos");
+  app->shaders.cube.ColorLoc = glGetAttribLocation(CubeProgID, "aColor");
+
+  app->shaders.cube.modelLoc = glGetUniformLocation(CubeProgID, "model");
+  app->shaders.cube.viewLoc = glGetUniformLocation(CubeProgID, "view");
+  app->shaders.cube.projLoc = glGetUniformLocation(CubeProgID, "projection");
 
   glGenBuffers(1, &app->shaders.cube.PosVBO);
   glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.PosVBO);
@@ -572,12 +314,56 @@ static void render(struct app *app) {
 
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LESS);
-  glEnable(GL_CULL_FACE);
+  // glEnable(GL_CULL_FACE);
 
   qcam_input_update(&app->cam, 16.66f);
 
+  glUseProgram(app->shaders.cube.ProgID);
+  glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.PosVBO);
+  glEnableVertexAttribArray(app->shaders.cube.PosLoc);
+  glVertexAttribPointer(app->shaders.cube.PosLoc, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+  glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.ColorVBO);
+  glEnableVertexAttribArray(app->shaders.cube.ColorLoc);
+  glVertexAttribPointer(app->shaders.cube.ColorLoc, 3, GL_FLOAT, GL_FALSE, 0,
+                        0);
+
+  static float angle = 0.f;
+  float AspectRatio = ((float)app->width) / ((float)app->height);
+  mat4 model, view;
+  glm_mat4_identity(model);
+  glm_translate(model, (vec3){0.f, 0.f, -50.f});
+  glm_scale(model, (vec3){10.f, 10.f, 10.f});
+  glm_rotate(model, angle, (vec3){0.f, 1.f, 0.f});
+  angle += 0.003f;
+  qcam_get_view(&app->cam, view);
+  qcam_get_proj(&app->cam, AspectRatio, 0.1f, 1000.f);
+
+  static bool dump = true;
+  if (dump) {
+    glm_mat4_print(model, stderr);
+    glm_mat4_print(view, stderr);
+    glm_mat4_print(app->cam.ProjectionMatrix, stderr);
+    fprintf(stderr, "%d %d\n", app->shaders.cube.PosLoc,
+            app->shaders.cube.ColorLoc);
+    fprintf(stderr, "%d %d %d\n", app->shaders.cube.modelLoc,
+            app->shaders.cube.viewLoc, app->shaders.cube.projLoc);
+    dump = false;
+  }
+
+  glUniformMatrix4fv(app->shaders.cube.modelLoc, 1, GL_FALSE, (float *)model);
+  glUniformMatrix4fv(app->shaders.cube.viewLoc, 1, GL_FALSE, (float *)view);
+  glUniformMatrix4fv(app->shaders.cube.projLoc, 1, GL_FALSE,
+                     (float *)app->cam.ProjectionMatrix);
+
+  GLenum err;
+  while ((err = glGetError()) != GL_NO_ERROR)
+    printf("GL ERR %x\n", err);
+
+  glDrawArrays(GL_TRIANGLES, 0, 12 * 3);
+
   glDisable(GL_DEPTH_TEST);
-  glDisable(GL_CULL_FACE);
+  // glDisable(GL_CULL_FACE);
 
   glUseProgram(app->shaders.overlay.ProgID);
   glBindBuffer(GL_ARRAY_BUFFER, app->shaders.overlay.VBO);
@@ -586,52 +372,60 @@ static void render(struct app *app) {
   glVertexAttribPointer(app->shaders.overlay.inPositionLoc, 2, GL_FLOAT,
                         GL_FALSE, 0, 0);
 
+  float mpos_x, mpos_y;
+  qwindow_get_pointer(app->win, &mpos_x, &mpos_y);
   glUniform4f(app->shaders.overlay.fragColorLoc, 10.f, 10.f, 10.f, 255.f);
-  glUniform4f(app->shaders.overlay.inRectLoc, app->mpos_x - 20.f,
-              app->mpos_y - 20.f, 40.f, 40.f);
+  glUniform4f(app->shaders.overlay.inRectLoc, mpos_x - 20.f, mpos_y - 20.f,
+              40.f, 40.f);
   glUniform2f(app->shaders.overlay.screenLoc, app->width, app->height);
   glUniform1f(app->shaders.overlay.cornerRadiusLoc, 10.f);
 
   glDrawArrays(GL_TRIANGLES, 0, 6);
 
-  eglSwapBuffers(app->egl_display, app->egl_surface);
+  qwindow_swap(app->win);
 }
 
-int main(void) {
+int main(int argc, const char *const argv[]) {
+  apr_app_initialize(&argc, &argv, NULL);
+
+  apr_pool_t *pool;
+  apr_pool_create_core(&pool);
+
   struct app app = {
       .width = 640,
       .height = 480,
   };
 
-  app.display = wl_display_connect(NULL);
-  if (!app.display) {
-    fprintf(stderr, "Failed to connect to Wayland\n");
-    return 1;
-  }
-
-  app.registry = wl_display_get_registry(app.display);
-  wl_registry_add_listener(app.registry, &registry_listener, &app);
-  wl_display_roundtrip(app.display);
-
-  app.surface = wl_compositor_create_surface(app.compositor);
-
-  app.xdg_surface = xdg_wm_base_get_xdg_surface(app.wm_base, app.surface);
-  xdg_surface_add_listener(app.xdg_surface, &xdg_surface_listener, &app);
-
-  app.toplevel = xdg_surface_get_toplevel(app.xdg_surface);
-  xdg_toplevel_add_listener(app.toplevel, &toplevel_listener, &app);
-  xdg_toplevel_set_title(app.toplevel, "Wayland OpenGL Demo");
-
-  wl_surface_commit(app.surface);
-
-  while (!app.configured)
-    wl_display_dispatch(app.display);
-
+  qwindow_init(&app.win, pool);
   init_egl(&app);
 
-  while (wl_display_dispatch(app.display) != -1) {
+  struct pollfd pfd = {
+      .fd =,
+      .events = POLLIN,
+  };
+
+  while (1) {
+    wl_display_dispatch_pending(app.win->display);
+
+    wl_display_flush(app.win->display);
+
+    if (wl_display_prepare_read(app.win->display) == -1) {
+      wl_display_dispatch_pending(app.win->display);
+      continue;
+    }
+
+    int ret = poll(&pfd, 1, 16); // ~60fps timeout
+
+    if (ret > 0 && (pfd.revents & POLLIN)) {
+      wl_display_read_events(app.win->display);
+      wl_display_dispatch_pending(app.win->display);
+    } else {
+      wl_display_cancel_read(app.win->display);
+    }
+
     render(&app);
   }
 
+  apr_terminate();
   return 0;
 }

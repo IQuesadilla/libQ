@@ -3,7 +3,10 @@
     "arguments": [
       "/usr/bin/gcc",
       "-c",
-      "-I/usr/local/include",
+      "-DLINUX",
+      "-D_REENTRANT",
+      "-D_GNU_SOURCE",
+      "-I/usr/include/apr-1",
       "-I",
       "/work/root/include",
       "-I",
@@ -20,7 +23,10 @@
     "arguments": [
       "/usr/bin/gcc",
       "-c",
-      "-I/usr/local/include",
+      "-DLINUX",
+      "-D_REENTRANT",
+      "-D_GNU_SOURCE",
+      "-I/usr/include/apr-1",
       "-I",
       "/work/root/include",
       "-I",
