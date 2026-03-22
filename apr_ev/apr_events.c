@@ -27,8 +27,8 @@ static apr_status_t internal_run(void *baton, apr_pollfd_t *pfd) {
   return APR_EINVAL;
 }
 
-void apr_event_add_file(apr_loop_t *loop, apr_pool_t *pool, int reqevents,
-                        apr_event_file_cb_t fn, void *ud) {
+void apr_event_add_file(apr_loop_t *loop, apr_file_t *file, apr_pool_t *pool,
+                        int reqevents, apr_event_file_cb_t fn, void *ud) {
   apr_event_t *ev = apr_palloc(pool, sizeof(*ev));
   *ev = (apr_event_t){
       .fn = (apr_event_cb_t)fn,
@@ -38,7 +38,7 @@ void apr_event_add_file(apr_loop_t *loop, apr_pool_t *pool, int reqevents,
   apr_pollfd_t *pfd = apr_palloc(pool, sizeof(*pfd));
   *pfd = (apr_pollfd_t){
       .desc_type = APR_POLL_FILE,
-      .desc.s = NULL,
+      .desc.f = file,
       .client_data = ev,
       .p = pool,
       .reqevents = reqevents,
@@ -53,23 +53,5 @@ void apr_event_run(apr_loop_t *loop) {
 
 void apr_event_setup(apr_loop_t **loop, apr_pool_t *pool) {
   *loop = apr_palloc(pool, sizeof(**loop));
-  apr_pollcb_create(&(*loop)->pcb, 16, pool, 0);
+  apr_pollcb_create(&(*loop)->pcb, 16, pool, APR_POLLSET_WAKEABLE);
 }
-
-/*
-int main(int argc, char *argv[]) {
-  apr_initialize();
-
-  apr_pool_t *pool;
-  apr_pool_create_unmanaged(&pool);
-
-  apr_pollcb_t *pcb;
-  apr_pollcb_create(&pcb, 16, pool, APR_POLLSET_WAKEABLE);
-
-  apr_event_add_file(pcb, pool);
-
-  apr_event_run(pcb);
-
-  apr_terminate();
-}
-*/

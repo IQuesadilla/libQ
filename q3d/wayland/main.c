@@ -1,13 +1,4 @@
 #define _POSIX_C_SOURCE 200112L
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include <poll.h>
-#include <sys/mman.h>
-#include <unistd.h>
-
 #include <GLES2/gl2.h>
 
 #include <apr.h>
@@ -190,29 +181,36 @@ struct app {
   } shaders;
 
   int width, height;
-};
 
-bool checkCompileErrors(GLuint shader, bool isprogram, char *type) {
+  uint64_t last_time, last_report, frames;
+  apr_file_t *err;
+};
+typedef struct app app_t;
+
+bool checkCompileErrors(GLuint shader, bool isprogram, char *type,
+                        apr_file_t *err) {
   GLint success;
   GLchar infoLog[1024];
   if (!isprogram) {
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
     if (!success) {
       glGetShaderInfoLog(shader, 1024, NULL, infoLog);
-      fprintf(stderr, "SHADER_COMPILATION_ERROR of type: %s -> %s", type,
-              infoLog);
+      apr_file_printf(err, "SHADER_COMPILATION_ERROR of type: %s -> %s", type,
+                      infoLog);
     }
   } else {
     glGetProgramiv(shader, GL_LINK_STATUS, &success);
     if (!success) {
       glGetProgramInfoLog(shader, 1024, NULL, infoLog);
-      fprintf(stderr, "PROGRAM_LINKING_ERROR of type: %s -> %s", type, infoLog);
+      apr_file_printf(err, "PROGRAM_LINKING_ERROR of type: %s -> %s", type,
+                      infoLog);
     }
   }
   return !success;
 }
 
-int LoadShader(const char *vertex_source, const char *fragment_source) {
+int LoadShader(const char *vertex_source, const char *fragment_source,
+               apr_file_t *err) {
   // const char *vertex_source = solid_vert_glsl;
   // const char *fragment_source = solid_frag_glsl;
   bool error = false;
@@ -220,7 +218,7 @@ int LoadShader(const char *vertex_source, const char *fragment_source) {
   GLuint vshader = glCreateShader(GL_VERTEX_SHADER);
   glShaderSource(vshader, 1, &vertex_source, NULL);
   glCompileShader(vshader);
-  bool verror = checkCompileErrors(vshader, false, "VERTEX");
+  bool verror = checkCompileErrors(vshader, false, "VERTEX", err);
   if (verror)
     glDeleteShader(vshader);
   error |= verror;
@@ -228,7 +226,7 @@ int LoadShader(const char *vertex_source, const char *fragment_source) {
   GLuint fshader = glCreateShader(GL_FRAGMENT_SHADER);
   glShaderSource(fshader, 1, &fragment_source, NULL);
   glCompileShader(fshader);
-  bool ferror = checkCompileErrors(fshader, false, "FRAGMENT");
+  bool ferror = checkCompileErrors(fshader, false, "FRAGMENT", err);
   if (ferror)
     glDeleteShader(fshader);
   error |= ferror;
@@ -241,7 +239,7 @@ int LoadShader(const char *vertex_source, const char *fragment_source) {
   glAttachShader(programID, vshader);
   glAttachShader(programID, fshader);
   glLinkProgram(programID);
-  error = checkCompileErrors(programID, true, "PROGRAM");
+  error = checkCompileErrors(programID, true, "PROGRAM", err);
 
   glDeleteShader(vshader);
   glDeleteShader(fshader);
@@ -258,9 +256,9 @@ static void init_egl(struct app *app) {
   app->cam.BinarySensitivity = 4.f;
 
   // Shader RECT
-  int RectProgID = LoadShader(solid_vert_glsl, solid_frag_glsl);
+  int RectProgID = LoadShader(solid_vert_glsl, solid_frag_glsl, app->err);
   if (RectProgID < 0) {
-    fprintf(stderr, "Failed to load rect shader!\n");
+    apr_file_printf(app->err, "Failed to load rect shader!\n");
     exit(0);
   }
 
@@ -282,9 +280,9 @@ static void init_egl(struct app *app) {
   glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
 
   // Shader CUBE
-  int CubeProgID = LoadShader(basic_colored_vert, basic_colored_frag);
+  int CubeProgID = LoadShader(basic_colored_vert, basic_colored_frag, app->err);
   if (CubeProgID < 0) {
-    fprintf(stderr, "Failed to load rect shader!\n");
+    apr_file_printf(app->err, "Failed to load rect shader!\n");
     exit(0);
   }
 
@@ -307,7 +305,7 @@ static void init_egl(struct app *app) {
   app->shaders.cube.ProgID = CubeProgID;
 }
 
-static void render(struct app *app) {
+static void render(app_t *app, uint64_t dT) {
   glViewport(0, 0, app->width, app->height);
   glClearColor(0.1f, 0.2f, 0.6f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -335,7 +333,7 @@ static void render(struct app *app) {
   glm_translate(model, (vec3){0.f, 0.f, -50.f});
   glm_scale(model, (vec3){10.f, 10.f, 10.f});
   glm_rotate(model, angle, (vec3){0.f, 1.f, 0.f});
-  angle += 0.003f;
+  angle += 0.0000006 * ((double)dT);
   qcam_get_view(&app->cam, view);
   qcam_get_proj(&app->cam, AspectRatio, 0.1f, 1000.f);
 
@@ -344,10 +342,10 @@ static void render(struct app *app) {
     glm_mat4_print(model, stderr);
     glm_mat4_print(view, stderr);
     glm_mat4_print(app->cam.ProjectionMatrix, stderr);
-    fprintf(stderr, "%d %d\n", app->shaders.cube.PosLoc,
-            app->shaders.cube.ColorLoc);
-    fprintf(stderr, "%d %d %d\n", app->shaders.cube.modelLoc,
-            app->shaders.cube.viewLoc, app->shaders.cube.projLoc);
+    apr_file_printf(app->err, "%d %d\n", app->shaders.cube.PosLoc,
+                    app->shaders.cube.ColorLoc);
+    apr_file_printf(app->err, "%d %d %d\n", app->shaders.cube.modelLoc,
+                    app->shaders.cube.viewLoc, app->shaders.cube.projLoc);
     dump = false;
   }
 
@@ -358,7 +356,7 @@ static void render(struct app *app) {
 
   GLenum err;
   while ((err = glGetError()) != GL_NO_ERROR)
-    printf("GL ERR %x\n", err);
+    apr_file_printf(app->err, "GL ERR %x\n", err);
 
   glDrawArrays(GL_TRIANGLES, 0, 12 * 3);
 
@@ -385,45 +383,57 @@ static void render(struct app *app) {
   qwindow_swap(app->win);
 }
 
+void redraw(void *ud, uint64_t dT) {
+  app_t *app = ud;
+  // qwindow_make_current(app->win);
+  render(app, dT);
+
+  app->frames++;
+
+  uint64_t t = apr_time_now();
+  uint64_t elapsed = t - app->last_report;
+  if (elapsed >= 5000000) {
+    uint64_t fps = (app->frames * 1000000) / elapsed;
+
+    apr_file_printf(app->err, "FPS: %lu\n", fps);
+
+    app->frames = 0;
+    app->last_report = t;
+  }
+}
+
 int main(int argc, const char *const argv[]) {
   apr_app_initialize(&argc, &argv, NULL);
 
   apr_pool_t *pool;
   apr_pool_create_core(&pool);
 
-  struct app app = {
+  apr_file_t *err;
+  apr_file_open_stderr(&err, pool);
+
+  apr_loop_t *loop;
+  apr_event_setup(&loop, pool);
+
+  app_t app = {
       .width = 640,
       .height = 480,
+      .err = err,
   };
 
-  qwindow_init(&app.win, pool);
+  qwindow_events_t events = {
+      .loop = loop,
+      .ud = &app,
+      .redraw = redraw,
+  };
+
+  qwindow_init(&app.win, pool, &events);
   init_egl(&app);
 
-  struct pollfd pfd = {
-      .fd =,
-      .events = POLLIN,
-  };
-
   while (1) {
-    wl_display_dispatch_pending(app.win->display);
-
-    wl_display_flush(app.win->display);
-
-    if (wl_display_prepare_read(app.win->display) == -1) {
-      wl_display_dispatch_pending(app.win->display);
+    if (qwindow_pre(app.win))
       continue;
-    }
 
-    int ret = poll(&pfd, 1, 16); // ~60fps timeout
-
-    if (ret > 0 && (pfd.revents & POLLIN)) {
-      wl_display_read_events(app.win->display);
-      wl_display_dispatch_pending(app.win->display);
-    } else {
-      wl_display_cancel_read(app.win->display);
-    }
-
-    render(&app);
+    apr_event_run(loop);
   }
 
   apr_terminate();

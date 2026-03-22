@@ -2,6 +2,7 @@
 
 #include "xdg-shell-client-protocol.h"
 #include <EGL/egl.h>
+#include <GLES2/gl2.h>
 #include <wayland-client.h>
 #include <wayland-egl.h>
 #include <xkbcommon/xkbcommon.h>
@@ -41,6 +42,14 @@ struct qwindow {
   int wayland_fd;
   apr_file_t *wayland_file;
   apr_pool_t *pool;
+  redraw_fn_t redraw;
+  void *ud;
+
+  uint64_t lastframe;
+
+  bool cancel_this_frame;
+  struct wl_callback *frame_cb;
+  int can_render;
 
   int width, height;
   float mpos_x, mpos_y;
@@ -200,6 +209,7 @@ static void toplevel_configure(void *data, struct xdg_toplevel *toplevel,
                                struct wl_array *states) {
   qwindow_t *win = data;
 
+  fprintf(stderr, "conf - w: %u, h: %u\n", width, height);
   if (width > 0 && height > 0) {
     win->width = width;
     win->height = height;
@@ -207,13 +217,19 @@ static void toplevel_configure(void *data, struct xdg_toplevel *toplevel,
   }
 }
 
+static void toplevel_configure_bounds(void *data, struct xdg_toplevel *toplevel,
+                                      int32_t width, int32_t height) {
+  fprintf(stderr, "conf bounds - w: %u, h: %u\n", width, height);
+}
 static void toplevel_close(void *data, struct xdg_toplevel *toplevel) {
+  fprintf(stderr, "Closing\n");
   exit(0);
 }
 
 static const struct xdg_toplevel_listener toplevel_listener = {
     .configure = toplevel_configure,
     .close = toplevel_close,
+    .configure_bounds = toplevel_configure_bounds,
 };
 
 static void registry_global(void *data, struct wl_registry *registry,
@@ -248,6 +264,26 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_remove,
 };
 
+static void frame_done(void *data, struct wl_callback *cb, uint32_t time) {
+  qwindow_t *win = data;
+
+  // fprintf(stderr, "done\n");
+
+  wl_callback_destroy(cb);
+  win->frame_cb = NULL;
+  win->can_render = 1;
+}
+
+static const struct wl_callback_listener frame_listener = {
+    .done = frame_done,
+};
+
+static void request_frame(qwindow_t *win) {
+  // fprintf(stderr, "request\n");
+  win->frame_cb = wl_surface_frame(win->surface);
+  wl_callback_add_listener(win->frame_cb, &frame_listener, win);
+}
+
 int qwindow_swap(qwindow_t *win) {
   eglSwapBuffers(win->egl_display, win->egl_surface);
   return 0;
@@ -259,14 +295,32 @@ int qwindow_get_pointer(qwindow_t *win, float *x, float *y) {
   return 0;
 }
 
-int qwindow_add_events(qwindow_t *win) {
-  win->wayland_fd = wl_display_get_fd(win->display);
-  apr_os_file_put(&win->wayland_file, &win->wayland_fd, APR_FILE_NOCLEANUP,
-                  win->pool);
-  return 0;
+void qwindow_make_current(qwindow_t *win) {
+  eglMakeCurrent(win->egl_display, win->egl_surface, win->egl_surface,
+                 win->egl_context);
 }
 
-int qwindow_init(qwindow_t **newwin, apr_pool_t *pool) {
+apr_status_t qwindow_event(apr_file_t *file, void *ud) {
+  qwindow_t *win = ud;
+  win->cancel_this_frame = false;
+
+  wl_display_read_events(win->display);
+  wl_display_dispatch_pending(win->display);
+
+  if (win->can_render) {
+    win->can_render = 0;
+
+    request_frame(win);
+
+    uint64_t now = apr_time_now();
+    win->redraw(win->ud, now - win->lastframe);
+    win->lastframe = now;
+  }
+
+  return APR_SUCCESS;
+}
+
+int qwindow_init(qwindow_t **newwin, apr_pool_t *pool, qwindow_events_t *ev) {
   EGLint major, minor;
   EGLint config_attribs[] = {
       EGL_SURFACE_TYPE,
@@ -293,6 +347,8 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *pool) {
   apr_pool_create(&newpool, pool);
   qwindow_t *win = apr_pcalloc(newpool, sizeof(*win));
   win->pool = newpool;
+  win->width = 640;
+  win->height = 480;
 
   win->display = wl_display_connect(NULL);
   if (!win->display) {
@@ -332,11 +388,46 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *pool) {
 
   win->egl_surface = eglCreateWindowSurface(win->egl_display, config,
                                             (uintptr_t)win->egl_window, NULL);
+  qwindow_make_current(win);
 
-  eglMakeCurrent(win->egl_display, win->egl_surface, win->egl_surface,
-                 win->egl_context);
+  win->redraw = ev->redraw;
+  win->ud = ev->ud;
+
+  request_frame(win);
+  eglSwapInterval(win->display, 0);
+  glViewport(0, 0, win->width, win->height);
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  qwindow_swap(win);
+  eglSwapInterval(win->display, 1);
+  win->lastframe = apr_time_now();
+
+  win->wayland_fd = wl_display_get_fd(win->display);
+  apr_os_file_put(&win->wayland_file, &win->wayland_fd, APR_FILE_NOCLEANUP,
+                  win->pool);
+  apr_event_add_file(ev->loop, win->wayland_file, win->pool, APR_POLLIN,
+                     qwindow_event, win);
 
   *newwin = win;
+
+  return 0;
+}
+
+int qwindow_pre(qwindow_t *win) {
+  if (win->cancel_this_frame) {
+    wl_display_cancel_read(win->display);
+  }
+
+  wl_display_dispatch_pending(win->display);
+
+  wl_display_flush(win->display);
+
+  win->cancel_this_frame = true;
+
+  if (wl_display_prepare_read(win->display) == -1) {
+    wl_display_dispatch_pending(win->display);
+    return 1;
+  }
 
   return 0;
 }

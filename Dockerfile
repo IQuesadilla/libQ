@@ -16,6 +16,7 @@ RUN dnf install -y \
     zsh \
     neovim \
     apr-devel \
+    apr-util-devel \
     libuv-devel \
     valgrind \
     gdb \
@@ -23,6 +24,7 @@ RUN dnf install -y \
     fd-find \
     python3 \
     python3-pip \
+    sass \
     SDL3-devel \
     SDL3_image-devel \
     SDL3_ttf-devel \
