@@ -10,6 +10,8 @@
 #include <qcam.h>
 #include <qwindow.h>
 
+#include "clay_renderer_opengl.h"
+
 static const char basic_colored_vert[] = "\
 attribute vec3 aPos; \n\
 attribute vec3 aColor; \n\
@@ -184,6 +186,9 @@ struct app {
 
   uint64_t last_time, last_report, frames;
   apr_file_t *err;
+
+  bool doredraw, dorelay;
+  Clay_GLRenderData_t *rend;
 };
 typedef struct app app_t;
 
@@ -305,7 +310,8 @@ static void init_egl(struct app *app) {
   app->shaders.cube.ProgID = CubeProgID;
 }
 
-static void render(app_t *app, uint64_t dT) {
+static void render(app_t *app, uint64_t dT,
+                   Clay_RenderCommandArray *render_commands) {
   glViewport(0, 0, app->width, app->height);
   glClearColor(0.1f, 0.2f, 0.6f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -380,13 +386,33 @@ static void render(app_t *app, uint64_t dT) {
 
   glDrawArrays(GL_TRIANGLES, 0, 6);
 
+  // SDL_Clay_RenderClayCommands(app->rend, render_commands);
+
   qwindow_swap(app->win);
 }
 
 void redraw(void *ud, uint64_t dT) {
   app_t *app = ud;
   // qwindow_make_current(app->win);
-  render(app, dT);
+
+  bool redraw = app->doredraw;
+  bool relay = /*newevents > 0 ||*/ app->dorelay;
+
+  Clay_RenderCommandArray render_commands = {0};
+  if (relay) {
+    // printf("relaying\n");
+    // render_commands = ClayVideoDemo_CreateLayout(app, lmouse);
+    redraw = true;
+
+    app->dorelay = false;
+  }
+
+  if (redraw) {
+    // TODO: This needs to be redone to be more event driven
+    render(app, dT, &render_commands);
+    app->doredraw = false;
+  } else {
+  }
 
   app->frames++;
 
@@ -418,6 +444,8 @@ int main(int argc, const char *const argv[]) {
       .width = 640,
       .height = 480,
       .err = err,
+      .dorelay = true,
+      .doredraw = true,
   };
 
   qwindow_events_t events = {
@@ -428,6 +456,26 @@ int main(int argc, const char *const argv[]) {
 
   qwindow_init(&app.win, pool, &events);
   init_egl(&app);
+
+  if (Clay_GLRenderInit(&app.rend, pool) < 0) {
+    fprintf(stderr, "Failed Clay_GLRenderInit\n");
+    exit(-1);
+  }
+
+  uint64_t clayMemorySize = Clay_MinMemorySize();
+  Clay_Initialize(
+      (Clay_Arena){
+          .memory = apr_palloc(pool, clayMemorySize),
+          .capacity = clayMemorySize,
+      },
+      (Clay_Dimensions){
+          .width = 640,
+          .height = 480,
+      },
+      (Clay_ErrorHandler){
+          .errorHandlerFunction = HandleClayErrors,
+      });
+  Clay_SetMeasureTextFunction(SDL_MeasureText, app.rend);
 
   while (1) {
     if (qwindow_pre(app.win))
