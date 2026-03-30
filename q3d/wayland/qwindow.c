@@ -42,33 +42,32 @@ struct qwindow {
   int wayland_fd;
   apr_file_t *wayland_file;
   apr_pool_t *pool;
-  redraw_fn_t redraw;
-  void *ud;
 
-  uint64_t lastframe;
+  qwindow_interface_t i;
 
   bool cancel_this_frame;
   struct wl_callback *frame_cb;
   int can_render;
 
-  int width, height;
-  float mpos_x, mpos_y;
   bool configured;
 };
+
+/*
+ * ------ PRIVATE ------
+ */
 
 static void pointer_enter(void *data, struct wl_pointer *pointer,
                           uint32_t serial, struct wl_surface *surface,
                           wl_fixed_t sx, wl_fixed_t sy) {
-  (void)pointer;
-  (void)serial;
-  (void)surface;
-  printf("Pointer entered at %.1f %.1f\n", wl_fixed_to_double(sx),
-         wl_fixed_to_double(sy));
+  qwindow_t *win = data;
+  apr_file_printf(win->i.err, "Pointer entered at %.1f %.1f\n",
+                  wl_fixed_to_double(sx), wl_fixed_to_double(sy));
 }
 
 static void pointer_leave(void *data, struct wl_pointer *pointer,
                           uint32_t serial, struct wl_surface *surface) {
-  printf("Pointer left\n");
+  qwindow_t *win = data;
+  apr_file_printf(win->i.err, "Pointer left\n");
 }
 
 static void pointer_motion(void *data, struct wl_pointer *pointer,
@@ -76,20 +75,28 @@ static void pointer_motion(void *data, struct wl_pointer *pointer,
   qwindow_t *win = data;
   // printf("Motion %.1f %.1f\n", wl_fixed_to_double(sx),
   // wl_fixed_to_double(sy));
-  win->mpos_x = wl_fixed_to_double(sx);
-  win->mpos_y = wl_fixed_to_double(sy);
+  float x = wl_fixed_to_double(sx);
+  float y = wl_fixed_to_double(sy);
+
+  if (win->i.mouse_move)
+    win->i.mouse_move(win->i.ud, x, y);
 }
 
 static void pointer_button(void *data, struct wl_pointer *pointer,
                            uint32_t serial, uint32_t time, uint32_t button,
                            uint32_t state) {
-  printf("Button %u %s\n", button,
-         state == WL_POINTER_BUTTON_STATE_PRESSED ? "pressed" : "released");
+  qwindow_t *win = data;
+  // apr_file_printf(win->i.err, "Button %u %s\n", button,
+  // state == WL_POINTER_BUTTON_STATE_PRESSED ? "pressed"
+  // : "released");
+  win->i.mouse_down(win->i.ud, state == WL_POINTER_BUTTON_STATE_PRESSED);
 }
 
 static void pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
                          uint32_t axis, wl_fixed_t value) {
-  printf("Scroll %.2f\n", wl_fixed_to_double(value));
+  qwindow_t *win = data;
+  apr_file_printf(win->i.err, "Scroll %d %.2f\n", axis,
+                  wl_fixed_to_double(value));
 }
 
 static const struct wl_pointer_listener pointer_listener = {
@@ -118,21 +125,14 @@ static void keyboard_keymap(void *data, struct wl_keyboard *keyboard,
 static void keyboard_enter(void *data, struct wl_keyboard *keyboard,
                            uint32_t serial, struct wl_surface *surface,
                            struct wl_array *keys) {
-  (void)data;
-  (void)keyboard;
-  (void)serial;
-  (void)surface;
-  (void)keys;
-  printf("Keyboard focus entered\n");
+  qwindow_t *win = data;
+  apr_file_printf(win->i.err, "Keyboard focus entered\n");
 }
 
 static void keyboard_leave(void *data, struct wl_keyboard *keyboard,
                            uint32_t serial, struct wl_surface *surface) {
-  (void)data;
-  (void)keyboard;
-  (void)serial;
-  (void)surface;
-  printf("Keyboard focus left\n");
+  qwindow_t *win = data;
+  apr_file_printf(win->i.err, "Keyboard focus left\n");
 }
 
 static void keyboard_key(void *data, struct wl_keyboard *keyboard,
@@ -145,7 +145,7 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
 
     char name[64];
     xkb_keysym_get_name(sym, name, sizeof(name));
-    printf("Key pressed: %s\n", name);
+    apr_file_printf(win->i.err, "Key pressed: %s\n", name);
   }
 }
 
@@ -209,20 +209,25 @@ static void toplevel_configure(void *data, struct xdg_toplevel *toplevel,
                                struct wl_array *states) {
   qwindow_t *win = data;
 
-  fprintf(stderr, "conf - w: %u, h: %u\n", width, height);
+  // fprintf(stderr, "conf - w: %u, h: %u\n", width, height);
   if (width > 0 && height > 0) {
-    win->width = width;
-    win->height = height;
+    win->i.width = width;
+    win->i.height = height;
     wl_egl_window_resize(win->egl_window, width, height, 0, 0);
+
+    if (win->i.resize)
+      win->i.resize(win->i.ud, width, height);
   }
 }
 
 static void toplevel_configure_bounds(void *data, struct xdg_toplevel *toplevel,
                                       int32_t width, int32_t height) {
-  fprintf(stderr, "conf bounds - w: %u, h: %u\n", width, height);
+  qwindow_t *win = data;
+  apr_file_printf(win->i.err, "conf bounds - w: %u, h: %u\n", width, height);
 }
 static void toplevel_close(void *data, struct xdg_toplevel *toplevel) {
-  fprintf(stderr, "Closing\n");
+  qwindow_t *win = data;
+  apr_file_printf(win->i.err, "Closing\n");
   exit(0);
 }
 
@@ -284,23 +289,7 @@ static void request_frame(qwindow_t *win) {
   wl_callback_add_listener(win->frame_cb, &frame_listener, win);
 }
 
-int qwindow_swap(qwindow_t *win) {
-  eglSwapBuffers(win->egl_display, win->egl_surface);
-  return 0;
-}
-
-int qwindow_get_pointer(qwindow_t *win, float *x, float *y) {
-  *x = win->mpos_x;
-  *y = win->mpos_y;
-  return 0;
-}
-
-void qwindow_make_current(qwindow_t *win) {
-  eglMakeCurrent(win->egl_display, win->egl_surface, win->egl_surface,
-                 win->egl_context);
-}
-
-apr_status_t qwindow_event(apr_file_t *file, void *ud) {
+static apr_status_t qwindow_event(apr_file_t *file, void *ud) {
   qwindow_t *win = ud;
   win->cancel_this_frame = false;
 
@@ -312,15 +301,29 @@ apr_status_t qwindow_event(apr_file_t *file, void *ud) {
 
     request_frame(win);
 
-    uint64_t now = apr_time_now();
-    win->redraw(win->ud, now - win->lastframe);
-    win->lastframe = now;
+    if (win->i.redraw)
+      win->i.redraw(win->i.ud);
   }
 
   return APR_SUCCESS;
 }
 
-int qwindow_init(qwindow_t **newwin, apr_pool_t *pool, qwindow_events_t *ev) {
+/*
+ * ------ PUBLIC ------
+ */
+
+int qwindow_swap(qwindow_t *win) {
+  eglSwapBuffers(win->egl_display, win->egl_surface);
+  return 0;
+}
+
+void qwindow_make_current(qwindow_t *win) {
+  eglMakeCurrent(win->egl_display, win->egl_surface, win->egl_surface,
+                 win->egl_context);
+}
+
+int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
+                 qwindow_interface_t *interface) {
   EGLint major, minor;
   EGLint config_attribs[] = {
       EGL_SURFACE_TYPE,
@@ -344,15 +347,14 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *pool, qwindow_events_t *ev) {
   EGLint n;
 
   apr_pool_t *newpool;
-  apr_pool_create(&newpool, pool);
+  apr_pool_create(&newpool, parent);
   qwindow_t *win = apr_pcalloc(newpool, sizeof(*win));
   win->pool = newpool;
-  win->width = 640;
-  win->height = 480;
+  win->i = *interface;
 
   win->display = wl_display_connect(NULL);
   if (!win->display) {
-    fprintf(stderr, "Failed to connect to Wayland\n");
+    apr_file_printf(win->i.err, "Failed to connect to Wayland\n");
     return 1;
   }
 
@@ -367,7 +369,7 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *pool, qwindow_events_t *ev) {
 
   win->toplevel = xdg_surface_get_toplevel(win->xdg_surface);
   xdg_toplevel_add_listener(win->toplevel, &toplevel_listener, win);
-  xdg_toplevel_set_title(win->toplevel, "Wayland OpenGL Demo");
+  xdg_toplevel_set_title(win->toplevel, "qwindow");
 
   wl_surface_commit(win->surface);
 
@@ -384,28 +386,25 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *pool, qwindow_events_t *ev) {
   win->egl_context =
       eglCreateContext(win->egl_display, config, EGL_NO_CONTEXT, ctx);
 
-  win->egl_window = wl_egl_window_create(win->surface, win->width, win->height);
+  win->egl_window =
+      wl_egl_window_create(win->surface, win->i.width, win->i.height);
 
   win->egl_surface = eglCreateWindowSurface(win->egl_display, config,
                                             (uintptr_t)win->egl_window, NULL);
   qwindow_make_current(win);
 
-  win->redraw = ev->redraw;
-  win->ud = ev->ud;
-
   request_frame(win);
   eglSwapInterval(win->display, 0);
-  glViewport(0, 0, win->width, win->height);
+  glViewport(0, 0, win->i.width, win->i.height);
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   qwindow_swap(win);
   eglSwapInterval(win->display, 1);
-  win->lastframe = apr_time_now();
 
   win->wayland_fd = wl_display_get_fd(win->display);
   apr_os_file_put(&win->wayland_file, &win->wayland_fd, APR_FILE_NOCLEANUP,
                   win->pool);
-  apr_event_add_file(ev->loop, win->wayland_file, win->pool, APR_POLLIN,
+  apr_event_add_file(win->i.loop, win->wayland_file, win->pool, APR_POLLIN,
                      qwindow_event, win);
 
   *newwin = win;

@@ -1,16 +1,15 @@
-#define _POSIX_C_SOURCE 200112L
-#include <GLES2/gl2.h>
-
 #include <apr.h>
 #include <apr_general.h>
 #include <apr_pools.h>
 
 #include <cglm/cglm.h>
 
+#include <GLES2/gl2.h>
+
 #include <qcam.h>
 #include <qwindow.h>
 
-#include "clay_renderer_opengl.h"
+#include "qlayout_renderer.h"
 
 static const char basic_colored_vert[] = "\
 attribute vec3 aPos; \n\
@@ -183,12 +182,18 @@ struct app {
   } shaders;
 
   int width, height;
+  float aspect_ratio;
 
-  uint64_t last_time, last_report, frames;
+  float mpos_x, mpos_y;
+  int mdown;
+
+  uint64_t lastframe;
+
+  uint64_t last_report, frames;
   apr_file_t *err;
 
-  bool doredraw, dorelay;
-  Clay_GLRenderData_t *rend;
+  bool doredraw, dorelay, needs_redraw;
+  qlayout_renderer_t *rend;
 };
 typedef struct app app_t;
 
@@ -259,6 +264,7 @@ static void init_egl(struct app *app) {
   qcam_init_default(&app->cam);
   app->cam.MovementSpeed = 0.01f;
   app->cam.BinarySensitivity = 4.f;
+  app->aspect_ratio = qcam_set_view(&app->cam, app->width, app->height);
 
   // Shader RECT
   int RectProgID = LoadShader(solid_vert_glsl, solid_frag_glsl, app->err);
@@ -313,90 +319,92 @@ static void init_egl(struct app *app) {
 static void render(app_t *app, uint64_t dT,
                    Clay_RenderCommandArray *render_commands) {
   glViewport(0, 0, app->width, app->height);
-  glClearColor(0.1f, 0.2f, 0.6f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  // glClearColor(0.1f, 0.2f, 0.6f, 1.0f);
+  // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  glEnable(GL_DEPTH_TEST);
-  glDepthFunc(GL_LESS);
-  // glEnable(GL_CULL_FACE);
+  if (qlayout_renderer_clay(app->rend, render_commands)) {
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    // glEnable(GL_CULL_FACE);
 
-  qcam_input_update(&app->cam, 16.66f);
+    qcam_input_update(&app->cam, ((float)dT) / 1e6);
 
-  glUseProgram(app->shaders.cube.ProgID);
-  glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.PosVBO);
-  glEnableVertexAttribArray(app->shaders.cube.PosLoc);
-  glVertexAttribPointer(app->shaders.cube.PosLoc, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    glUseProgram(app->shaders.cube.ProgID);
+    glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.PosVBO);
+    glEnableVertexAttribArray(app->shaders.cube.PosLoc);
+    glVertexAttribPointer(app->shaders.cube.PosLoc, 3, GL_FLOAT, GL_FALSE, 0,
+                          0);
 
-  glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.ColorVBO);
-  glEnableVertexAttribArray(app->shaders.cube.ColorLoc);
-  glVertexAttribPointer(app->shaders.cube.ColorLoc, 3, GL_FLOAT, GL_FALSE, 0,
-                        0);
+    glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.ColorVBO);
+    glEnableVertexAttribArray(app->shaders.cube.ColorLoc);
+    glVertexAttribPointer(app->shaders.cube.ColorLoc, 3, GL_FLOAT, GL_FALSE, 0,
+                          0);
 
-  static float angle = 0.f;
-  float AspectRatio = ((float)app->width) / ((float)app->height);
-  mat4 model, view;
-  glm_mat4_identity(model);
-  glm_translate(model, (vec3){0.f, 0.f, -50.f});
-  glm_scale(model, (vec3){10.f, 10.f, 10.f});
-  glm_rotate(model, angle, (vec3){0.f, 1.f, 0.f});
-  angle += 0.0000006 * ((double)dT);
-  qcam_get_view(&app->cam, view);
-  qcam_get_proj(&app->cam, AspectRatio, 0.1f, 1000.f);
+    static float angle = 0.f;
+    mat4 model, view;
+    glm_mat4_identity(model);
+    glm_translate(model, (vec3){0.f, 0.f, -50.f});
+    glm_scale(model, (vec3){10.f, 10.f, 10.f});
+    glm_rotate(model, angle, (vec3){0.f, 1.f, 0.f});
+    angle += 0.0000006 * ((double)dT);
+    qcam_get_view(&app->cam, view);
+    qcam_get_proj(&app->cam, app->aspect_ratio, 0.1f, 1000.f);
 
-  static bool dump = true;
-  if (dump) {
-    glm_mat4_print(model, stderr);
-    glm_mat4_print(view, stderr);
-    glm_mat4_print(app->cam.ProjectionMatrix, stderr);
-    apr_file_printf(app->err, "%d %d\n", app->shaders.cube.PosLoc,
-                    app->shaders.cube.ColorLoc);
-    apr_file_printf(app->err, "%d %d %d\n", app->shaders.cube.modelLoc,
-                    app->shaders.cube.viewLoc, app->shaders.cube.projLoc);
-    dump = false;
+    static bool dump = true;
+    if (dump) {
+      // glm_mat4_print(model, stderr);
+      // glm_mat4_print(view, stderr);
+      // glm_mat4_print(app->cam.ProjectionMatrix, stderr);
+      apr_file_printf(app->err, "%d %d\n", app->shaders.cube.PosLoc,
+                      app->shaders.cube.ColorLoc);
+      apr_file_printf(app->err, "%d %d %d\n", app->shaders.cube.modelLoc,
+                      app->shaders.cube.viewLoc, app->shaders.cube.projLoc);
+      dump = false;
+    }
+
+    glUniformMatrix4fv(app->shaders.cube.modelLoc, 1, GL_FALSE, (float *)model);
+    glUniformMatrix4fv(app->shaders.cube.viewLoc, 1, GL_FALSE, (float *)view);
+    glUniformMatrix4fv(app->shaders.cube.projLoc, 1, GL_FALSE,
+                       (float *)app->cam.ProjectionMatrix);
+
+    GLenum err;
+    while ((err = glGetError()) != GL_NO_ERROR)
+      apr_file_printf(app->err, "GL ERR %x\n", err);
+
+    glDrawArrays(GL_TRIANGLES, 0, 12 * 3);
+
+    /*
+glDisable(GL_DEPTH_TEST);
+// glDisable(GL_CULL_FACE);
+
+glUseProgram(app->shaders.overlay.ProgID);
+glBindBuffer(GL_ARRAY_BUFFER, app->shaders.overlay.VBO);
+// GLint aPos = glGetAttribLocation(rend->programID, "aPos");
+glEnableVertexAttribArray(app->shaders.overlay.inPositionLoc);
+glVertexAttribPointer(app->shaders.overlay.inPositionLoc, 2, GL_FLOAT,
+                      GL_FALSE, 0, 0);
+
+float mpos_x = app->mpos_x, mpos_y = app->mpos_y;
+glUniform4f(app->shaders.overlay.fragColorLoc, 10.f, 10.f, 10.f, 255.f);
+glUniform4f(app->shaders.overlay.inRectLoc, mpos_x - 20.f, mpos_y - 20.f,
+            40.f, 40.f);
+glUniform2f(app->shaders.overlay.screenLoc, app->width, app->height);
+glUniform1f(app->shaders.overlay.cornerRadiusLoc, 10.f);
+
+glDrawArrays(GL_TRIANGLES, 0, 6);
+*/
+
+    qwindow_swap(app->win);
   }
-
-  glUniformMatrix4fv(app->shaders.cube.modelLoc, 1, GL_FALSE, (float *)model);
-  glUniformMatrix4fv(app->shaders.cube.viewLoc, 1, GL_FALSE, (float *)view);
-  glUniformMatrix4fv(app->shaders.cube.projLoc, 1, GL_FALSE,
-                     (float *)app->cam.ProjectionMatrix);
-
-  GLenum err;
-  while ((err = glGetError()) != GL_NO_ERROR)
-    apr_file_printf(app->err, "GL ERR %x\n", err);
-
-  glDrawArrays(GL_TRIANGLES, 0, 12 * 3);
-
-  glDisable(GL_DEPTH_TEST);
-  // glDisable(GL_CULL_FACE);
-
-  glUseProgram(app->shaders.overlay.ProgID);
-  glBindBuffer(GL_ARRAY_BUFFER, app->shaders.overlay.VBO);
-  // GLint aPos = glGetAttribLocation(rend->programID, "aPos");
-  glEnableVertexAttribArray(app->shaders.overlay.inPositionLoc);
-  glVertexAttribPointer(app->shaders.overlay.inPositionLoc, 2, GL_FLOAT,
-                        GL_FALSE, 0, 0);
-
-  float mpos_x, mpos_y;
-  qwindow_get_pointer(app->win, &mpos_x, &mpos_y);
-  glUniform4f(app->shaders.overlay.fragColorLoc, 10.f, 10.f, 10.f, 255.f);
-  glUniform4f(app->shaders.overlay.inRectLoc, mpos_x - 20.f, mpos_y - 20.f,
-              40.f, 40.f);
-  glUniform2f(app->shaders.overlay.screenLoc, app->width, app->height);
-  glUniform1f(app->shaders.overlay.cornerRadiusLoc, 10.f);
-
-  glDrawArrays(GL_TRIANGLES, 0, 6);
-
-  // SDL_Clay_RenderClayCommands(app->rend, render_commands);
-
-  qwindow_swap(app->win);
 }
 
-void redraw(void *ud, uint64_t dT) {
+void redraw(void *ud) {
   app_t *app = ud;
+  bool lmouse = app->mdown;
   // qwindow_make_current(app->win);
 
   bool redraw = app->doredraw;
-  bool relay = /*newevents > 0 ||*/ app->dorelay;
+  bool relay = /*newevents > 0 ||*/ app->dorelay || app->needs_redraw || true;
 
   Clay_RenderCommandArray render_commands = {0};
   if (relay) {
@@ -404,14 +412,105 @@ void redraw(void *ud, uint64_t dT) {
     // render_commands = ClayVideoDemo_CreateLayout(app, lmouse);
     redraw = true;
 
+    Clay_BeginLayout();
+
+    Clay_Sizing layoutExpand = {.width = CLAY_SIZING_GROW(0),
+                                .height = CLAY_SIZING_GROW(0)};
+    Clay_Color contentBackgroundColor = {90, 90, 90, 255};
+
+    // char id[] = ;
+    // Clay_String sid = {.chars = id, .length = strlen(id)};
+    CLAY(CLAY_ID("OuterContainer"),
+         {
+             .backgroundColor = {30, 30, 30, 255},
+             .layout =
+                 {
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .sizing = layoutExpand,
+                     .padding = CLAY_PADDING_ALL(0),
+                     .childGap = 0,
+                 },
+         }) {
+      CLAY(CLAY_ID("HeaderBar"),
+           {
+               .layout =
+                   {
+                       .sizing =
+                           {
+                               .height = CLAY_SIZING_FIXED(30),
+                               .width = CLAY_SIZING_GROW(0),
+                           },
+                       .padding = {4, 4, 0, 0},
+                       .childGap = 16,
+                       .childAlignment = {.y = CLAY_ALIGN_Y_CENTER},
+                   },
+               .backgroundColor = contentBackgroundColor,
+           }) {
+        // NewSubmenu("File", {});
+
+        Clay_ElementId Button_el = CLAY_ID("FileButton");
+        static bool MenuVisible = false;
+        static bool ButtonHover = false;
+        ButtonHover = Clay_PointerOver(Button_el);
+        Clay_Color ButtonColor = ButtonHover ? (Clay_Color){255, 100, 100, 255}
+                                             : (Clay_Color){100, 100, 100, 255};
+        CLAY(Button_el, {
+                            .layout =
+                                {
+                                    .padding = {6, 6, 3, 3},
+                                },
+                            .backgroundColor = ButtonColor,
+                            .cornerRadius = CLAY_CORNER_RADIUS(4),
+                        }) {
+          Clay_ElementId Menu_el = CLAY_ID("FileMenu");
+          bool MenuHover = Clay_PointerOver(Menu_el);
+          if (ButtonHover && lmouse)
+            MenuVisible = true;
+          else if (MenuVisible && !ButtonHover && !MenuHover && lmouse)
+            MenuVisible = false;
+          CLAY_TEXT(CLAY_STRING("File"), CLAY_TEXT_CONFIG({
+                                             .fontId = 0,
+                                             .fontSize = 12,
+                                             .textColor = {255, 255, 255, 255},
+                                         }));
+          if (MenuVisible) {
+            CLAY(
+                Menu_el,
+                {
+                    .floating =
+                        {
+                            .attachTo = CLAY_ATTACH_TO_PARENT,
+                            .attachPoints = {.parent =
+                                                 CLAY_ATTACH_POINT_LEFT_BOTTOM},
+                        },
+                    .layout =
+                        {
+                            .padding = {0, 0, 0, 0},
+                            .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                            .sizing = {.width = CLAY_SIZING_FIXED(200)},
+                        },
+                    .backgroundColor = {40, 40, 40, 255},
+                    .cornerRadius = CLAY_CORNER_RADIUS(8),
+                }) {}
+            // sub
+          }
+        }
+      }
+    }
+
+    render_commands = Clay_EndLayout();
     app->dorelay = false;
   }
 
   if (redraw) {
-    // TODO: This needs to be redone to be more event driven
-    render(app, dT, &render_commands);
+    uint64_t now = apr_time_now();
+    render(app, now - app->lastframe, &render_commands);
+    app->lastframe = now;
+
     app->doredraw = false;
+    app->needs_redraw = false;
   } else {
+    app->needs_redraw = true;
   }
 
   app->frames++;
@@ -426,6 +525,40 @@ void redraw(void *ud, uint64_t dT) {
     app->frames = 0;
     app->last_report = t;
   }
+}
+
+void try_redraw(app_t *app) {
+  if (app->needs_redraw) {
+    redraw(app);
+  } else {
+    app->doredraw = true;
+  }
+}
+
+void resize(void *ud, int width, int height) {
+  app_t *app = ud;
+  app->width = width;
+  app->height = height;
+  app->aspect_ratio = qcam_set_view(&app->cam, width, height);
+
+  Clay_SetLayoutDimensions((Clay_Dimensions){.width = width, .height = height});
+}
+
+void mouse_move(void *ud, float x, float y) {
+  app_t *app = ud;
+  app->mpos_x = x;
+  app->mpos_y = y;
+  Clay_SetPointerState((Clay_Vector2){.x = app->mpos_x, .y = app->mpos_y},
+                       app->mdown);
+  try_redraw(app);
+}
+
+void mouse_down(void *ud, int down) {
+  app_t *app = ud;
+  app->mdown = down;
+  Clay_SetPointerState((Clay_Vector2){.x = app->mpos_x, .y = app->mpos_y},
+                       app->mdown);
+  try_redraw(app);
 }
 
 int main(int argc, const char *const argv[]) {
@@ -446,36 +579,28 @@ int main(int argc, const char *const argv[]) {
       .err = err,
       .dorelay = true,
       .doredraw = true,
+      .lastframe = apr_time_now(),
   };
 
-  qwindow_events_t events = {
+  qwindow_interface_t interface = {
+      .width = app.width,
+      .height = app.height,
+      .err = err,
       .loop = loop,
       .ud = &app,
       .redraw = redraw,
+      .resize = resize,
+      .mouse_move = mouse_move,
+      .mouse_down = mouse_down,
   };
 
-  qwindow_init(&app.win, pool, &events);
+  qwindow_init(&app.win, pool, &interface);
   init_egl(&app);
 
-  if (Clay_GLRenderInit(&app.rend, pool) < 0) {
-    fprintf(stderr, "Failed Clay_GLRenderInit\n");
+  if (qlayout_renderer_init(&app.rend, pool, app.err) < 0) {
+    apr_file_printf(app.err, "Failed Clay_GLRenderInit\n");
     exit(-1);
   }
-
-  uint64_t clayMemorySize = Clay_MinMemorySize();
-  Clay_Initialize(
-      (Clay_Arena){
-          .memory = apr_palloc(pool, clayMemorySize),
-          .capacity = clayMemorySize,
-      },
-      (Clay_Dimensions){
-          .width = 640,
-          .height = 480,
-      },
-      (Clay_ErrorHandler){
-          .errorHandlerFunction = HandleClayErrors,
-      });
-  Clay_SetMeasureTextFunction(SDL_MeasureText, app.rend);
 
   while (1) {
     if (qwindow_pre(app.win))

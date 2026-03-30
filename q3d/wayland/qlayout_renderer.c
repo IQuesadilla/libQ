@@ -1,10 +1,11 @@
 #define CLAY_IMPLEMENTATION
-#include "clay_renderer_opengl.h"
+#include "qlayout_renderer.h"
 
 #include <GLES2/gl2.h>
 // #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <apr.h>
+#include <apr_file_io.h>
 #include <apr_hash.h>
 #include <apr_pools.h>
 #include <cglm/cglm.h>
@@ -15,8 +16,9 @@ struct drawunit {
 };
 typedef struct drawunit drawunit_t;
 
-struct Clay_GLRenderData {
+struct qlayout_renderer {
   // SDL_Renderer *renderer;
+  Clay_Context *clay_cxt;
   TTF_TextEngine *textEngine;
   TTF_Font **fonts;
   struct {
@@ -34,7 +36,12 @@ struct Clay_GLRenderData {
   // drawunit_t *drawunits;
   apr_hash_t *drawunits;
   apr_pool_t *pool;
+  apr_file_t *err;
 };
+
+/*
+ * ------ PRIVATE ------
+ */
 
 // NOTE: Corner rounding should happen on the GPU, in the fragment shader
 
@@ -75,7 +82,8 @@ clampedRadius), SDL_roundf(center.y + SDL_sinf(angle) * clampedRadius)};
 }
 */
 
-static bool checkCompileErrors(GLuint shader, bool isprogram, char *type) {
+static bool checkCompileErrors(apr_file_t *err, GLuint shader, bool isprogram,
+                               char *type) {
   GLint success;
   GLchar infoLog[1024];
   if (!isprogram) {
@@ -100,7 +108,7 @@ static const float quadVerts[] = {
     0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f,
 };
 
-static int LoadShader(const char *vertex_source_path,
+static int LoadShader(apr_file_t *err, const char *vertex_source_path,
                       const char *fragment_source_path) {
   size_t vertex_source_size;
   const char *vertex_source =
@@ -121,7 +129,7 @@ static int LoadShader(const char *vertex_source_path,
   GLuint vshader = glCreateShader(GL_VERTEX_SHADER);
   glShaderSource(vshader, 1, &vertex_source, NULL);
   glCompileShader(vshader);
-  bool verror = checkCompileErrors(vshader, false, "VERTEX");
+  bool verror = checkCompileErrors(err, vshader, false, "VERTEX");
   if (verror)
     glDeleteShader(vshader);
   error |= verror;
@@ -129,7 +137,7 @@ static int LoadShader(const char *vertex_source_path,
   GLuint fshader = glCreateShader(GL_FRAGMENT_SHADER);
   glShaderSource(fshader, 1, &fragment_source, NULL);
   glCompileShader(fshader);
-  bool ferror = checkCompileErrors(fshader, false, "FRAGMENT");
+  bool ferror = checkCompileErrors(err, fshader, false, "FRAGMENT");
   if (ferror)
     glDeleteShader(fshader);
   error |= ferror;
@@ -142,7 +150,7 @@ static int LoadShader(const char *vertex_source_path,
   glAttachShader(programID, vshader);
   glAttachShader(programID, fshader);
   glLinkProgram(programID);
-  error = checkCompileErrors(programID, true, "PROGRAM");
+  error = checkCompileErrors(err, programID, true, "PROGRAM");
 
   glDeleteShader(vshader);
   glDeleteShader(fshader);
@@ -150,89 +158,7 @@ static int LoadShader(const char *vertex_source_path,
   return programID;
 }
 
-int Clay_GLRenderInit(Clay_GLRenderData_t **newrend, apr_pool_t *parent) {
-  if (!TTF_Init()) {
-    fprintf(stderr, "Failed TTF_Init\n");
-    exit(-1);
-  }
-
-  apr_pool_t *pool;
-  apr_pool_create(&pool, parent);
-  Clay_GLRenderData_t *rend = apr_pcalloc(pool, sizeof(Clay_GLRenderData_t));
-
-  rend->pool = pool;
-  rend->drawunits = NULL;
-  rend->prevcmdlen = 0;
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-  // Shader RECT
-  int RectProgID =
-      LoadShader("./assets/solid.vert.glsl", "./assets/solid.frag.glsl");
-  if (RectProgID < 0) {
-    fprintf(stderr, "Failed to load rect shader!\n");
-    return -1;
-  }
-
-  glUseProgram(RectProgID);
-  rend->shaders.rect.inPositionLoc =
-      glGetAttribLocation(RectProgID, "inPosition");
-
-  rend->shaders.rect.fragColorLoc =
-      glGetUniformLocation(RectProgID, "fragColor");
-  rend->shaders.rect.inRectLoc = glGetUniformLocation(RectProgID, "inRect");
-  rend->shaders.rect.cornerRadiusLoc =
-      glGetUniformLocation(RectProgID, "cornerRadius");
-  rend->shaders.rect.screenLoc = glGetUniformLocation(RectProgID, "screen");
-
-  rend->shaders.rect.ProgID = RectProgID;
-
-  glGenBuffers(1, &rend->shaders.rect.VBO);
-  glBindBuffer(GL_ARRAY_BUFFER, rend->shaders.rect.VBO);
-  glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
-
-  // Shader TEXT
-  int TextProgID =
-      LoadShader("./assets/text.vert.glsl", "./assets/text.frag.glsl");
-  if (TextProgID < 0) {
-    fprintf(stderr, "Failed to load text shader!\n");
-    return -1;
-  }
-
-  rend->shaders.text.inPositionLoc =
-      glGetAttribLocation(TextProgID, "inPosition");
-
-  rend->shaders.text.inRectLoc = glGetUniformLocation(TextProgID, "inRect");
-  rend->shaders.text.screenLoc = glGetUniformLocation(TextProgID, "screen");
-  rend->shaders.text.textImgLoc = glGetUniformLocation(TextProgID, "textImg");
-
-  rend->shaders.text.ProgID = TextProgID;
-
-  rend->textEngine = TTF_CreateSurfaceTextEngine();
-
-  rend->fonts = apr_pcalloc(rend->pool, sizeof(TTF_Font *));
-  if (!rend->fonts) {
-    SDL_LogError(SDL_LOG_CATEGORY_ERROR,
-                 "Failed to allocate memory for the font array: %s",
-                 SDL_GetError());
-    return SDL_APP_FAILURE;
-  }
-
-  TTF_Font *font = TTF_OpenFont("assets/Roboto-Regular.ttf", 24);
-  if (!font) {
-    SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to load font: %s",
-                 SDL_GetError());
-    return SDL_APP_FAILURE;
-  }
-
-  rend->fonts[0] = font;
-
-  *newrend = rend;
-
-  return 0;
-}
-
-void Clay_GLRenderFillRoundedRect(Clay_GLRenderData_t *rend,
+void Clay_GLRenderFillRoundedRect(qlayout_renderer_t *rend,
                                   const SDL_FRect rect,
                                   const float cornerRadius,
                                   const Clay_Color color) {
@@ -253,7 +179,7 @@ void Clay_GLRenderFillRoundedRect(Clay_GLRenderData_t *rend,
   return;
 }
 
-void Clay_GLRenderText(Clay_GLRenderData_t *rend, const SDL_FRect rect,
+void Clay_GLRenderText(qlayout_renderer_t *rend, const SDL_FRect rect,
                        SDL_Surface *textImg) {
   glUseProgram(rend->shaders.text.ProgID);
 
@@ -294,9 +220,135 @@ bool EqRenderCmd(Clay_RenderCommand *old, Clay_RenderCommand *new) {
   return true;
 }
 
-bool SDL_Clay_RenderClayCommands(Clay_GLRenderData_t *rend,
-                                 Clay_RenderCommandArray *rcommands) {
-  bool changed = rcommands->length != rend->prevcmdlen;
+Clay_Dimensions SDL_MeasureText(Clay_StringSlice text,
+                                Clay_TextElementConfig *config,
+                                void *userData) {
+  qlayout_renderer_t *rend = userData;
+  TTF_Font *font = rend->fonts[config->fontId];
+  int width, height;
+
+  TTF_SetFontSize(font, config->fontSize);
+  if (!TTF_GetStringSize(font, text.chars, text.length, &width, &height)) {
+    apr_file_printf(rend->err, "Failed to measure text: %s", SDL_GetError());
+  }
+
+  return (Clay_Dimensions){(float)width, (float)height};
+}
+
+void HandleClayErrors(Clay_ErrorData errorData) {
+  qlayout_renderer_t *rend = errorData.userData;
+  apr_file_printf(rend->err, "%s", errorData.errorText.chars);
+}
+
+/*
+ * ------ PUBLIC ------
+ */
+
+int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
+                          apr_file_t *err) {
+  apr_pool_t *pool;
+  apr_pool_create(&pool, parent);
+  qlayout_renderer_t *rend = apr_pcalloc(pool, sizeof(qlayout_renderer_t));
+
+  rend->pool = pool;
+  rend->drawunits = apr_hash_make(rend->pool);
+  rend->prevcmdlen = 0;
+  rend->w = 640;
+  rend->h = 480;
+  rend->err = err;
+
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  // Shader RECT
+  int RectProgID =
+      LoadShader(err, "./assets/solid.vert.glsl", "./assets/solid.frag.glsl");
+  if (RectProgID < 0) {
+    apr_file_printf(rend->err, "Failed to load rect shader!\n");
+    return -1;
+  }
+
+  glUseProgram(RectProgID);
+  rend->shaders.rect.inPositionLoc =
+      glGetAttribLocation(RectProgID, "inPosition");
+
+  rend->shaders.rect.fragColorLoc =
+      glGetUniformLocation(RectProgID, "fragColor");
+  rend->shaders.rect.inRectLoc = glGetUniformLocation(RectProgID, "inRect");
+  rend->shaders.rect.cornerRadiusLoc =
+      glGetUniformLocation(RectProgID, "cornerRadius");
+  rend->shaders.rect.screenLoc = glGetUniformLocation(RectProgID, "screen");
+
+  rend->shaders.rect.ProgID = RectProgID;
+
+  glGenBuffers(1, &rend->shaders.rect.VBO);
+  glBindBuffer(GL_ARRAY_BUFFER, rend->shaders.rect.VBO);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+
+  // Shader TEXT
+  int TextProgID =
+      LoadShader(err, "./assets/text.vert.glsl", "./assets/text.frag.glsl");
+  if (TextProgID < 0) {
+    apr_file_printf(rend->err, "Failed to load text shader!\n");
+    return -1;
+  }
+
+  rend->shaders.text.inPositionLoc =
+      glGetAttribLocation(TextProgID, "inPosition");
+
+  rend->shaders.text.inRectLoc = glGetUniformLocation(TextProgID, "inRect");
+  rend->shaders.text.screenLoc = glGetUniformLocation(TextProgID, "screen");
+  rend->shaders.text.textImgLoc = glGetUniformLocation(TextProgID, "textImg");
+
+  rend->shaders.text.ProgID = TextProgID;
+
+  rend->textEngine = TTF_CreateSurfaceTextEngine();
+
+  rend->fonts = apr_pcalloc(rend->pool, sizeof(TTF_Font *));
+  if (!rend->fonts) {
+    apr_file_printf(rend->err,
+                    "Failed to allocate memory for the font array: %s",
+                    SDL_GetError());
+    return -1;
+  }
+
+  if (!TTF_Init()) {
+    apr_file_printf(rend->err, "Failed TTF_Init\n");
+    return -1;
+  }
+
+  TTF_Font *font = TTF_OpenFont("assets/Roboto-Regular.ttf", 24);
+  if (!font) {
+    apr_file_printf(rend->err, "Failed to load font: %s", SDL_GetError());
+    return -1;
+  }
+
+  rend->fonts[0] = font;
+
+  uint32_t clayMemorySize = Clay_MinMemorySize();
+  rend->clay_cxt = Clay_Initialize(
+      (Clay_Arena){
+          .memory = apr_palloc(rend->pool, clayMemorySize),
+          .capacity = clayMemorySize,
+      },
+      (Clay_Dimensions){
+          .width = rend->w,
+          .height = rend->h,
+      },
+      (Clay_ErrorHandler){
+          .errorHandlerFunction = HandleClayErrors,
+          .userData = rend,
+      });
+  Clay_SetMeasureTextFunction(SDL_MeasureText, rend);
+
+  *newrend = rend;
+
+  return 0;
+}
+
+bool qlayout_renderer_clay(qlayout_renderer_t *rend,
+                           Clay_RenderCommandArray *rcommands) {
+  bool changed = rcommands->length != rend->prevcmdlen || true;
   // bool validScissor = false;
   // Clay_BoundingBox currentScissor = {0};
   for (size_t i = 0; i < rcommands->length; i++) {
@@ -343,6 +395,8 @@ bool SDL_Clay_RenderClayCommands(Clay_GLRenderData_t *rend,
   rend->prevcmdlen = rcommands->length;
   glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE);
   for (size_t i = 0; i < rcommands->length; i++) {
     Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
     const Clay_BoundingBox bounding_box = rcmd->boundingBox;
@@ -400,24 +454,4 @@ bool SDL_Clay_RenderClayCommands(Clay_GLRenderData_t *rend,
     }
   }
   return true;
-}
-
-Clay_Dimensions SDL_MeasureText(Clay_StringSlice text,
-                                Clay_TextElementConfig *config,
-                                void *userData) {
-  Clay_GLRenderData_t *rend = userData;
-  TTF_Font *font = rend->fonts[config->fontId];
-  int width, height;
-
-  TTF_SetFontSize(font, config->fontSize);
-  if (!TTF_GetStringSize(font, text.chars, text.length, &width, &height)) {
-    SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to measure text: %s",
-                 SDL_GetError());
-  }
-
-  return (Clay_Dimensions){(float)width, (float)height};
-}
-
-void HandleClayErrors(Clay_ErrorData errorData) {
-  fprintf(stderr, "%s", errorData.errorText.chars);
 }
