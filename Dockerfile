@@ -17,6 +17,10 @@ RUN dnf install -y \
     neovim \
     apr-devel \
     apr-util-devel \
+    libserf-devel \
+    lua \
+    lua-libs \
+    lua-devel \
     libuv-devel \
     valgrind \
     gdb \

@@ -11,4 +11,6 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
                           apr_file_t *err);
 bool qlayout_renderer_clay(qlayout_renderer_t *rend,
                            Clay_RenderCommandArray *rcommands);
+int qlayout_renderer_pre(qlayout_renderer_t *rend);
+void qlayout_renderer_resize(qlayout_renderer_t *rend, float w, float h);
 #endif

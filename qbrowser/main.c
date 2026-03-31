@@ -6,10 +6,21 @@
 
 #include <GLES2/gl2.h>
 
+#include <lauxlib.h>
+#include <lualib.h>
+
 #include <qcam.h>
 #include <qwindow.h>
 
+#include <xkbcommon/xkbcommon.h>
+
+#include "lua_clay.h"
 #include "qlayout_renderer.h"
+
+static const char lua_cmd[] = "\
+layout.log(\"hello\")\
+print(layout.add(2, 3))\
+";
 
 static const char basic_colored_vert[] = "\
 attribute vec3 aPos; \n\
@@ -194,6 +205,11 @@ struct app {
 
   bool doredraw, dorelay, needs_redraw;
   qlayout_renderer_t *rend;
+
+  char buffer[1024];
+  int nbuffer;
+
+  lua_State *L;
 };
 typedef struct app app_t;
 
@@ -323,6 +339,7 @@ static void render(app_t *app, uint64_t dT,
   // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   if (qlayout_renderer_clay(app->rend, render_commands)) {
+    /*
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     // glEnable(GL_CULL_FACE);
@@ -373,7 +390,6 @@ static void render(app_t *app, uint64_t dT,
 
     glDrawArrays(GL_TRIANGLES, 0, 12 * 3);
 
-    /*
 glDisable(GL_DEPTH_TEST);
 // glDisable(GL_CULL_FACE);
 
@@ -401,10 +417,11 @@ glDrawArrays(GL_TRIANGLES, 0, 6);
 void redraw(void *ud) {
   app_t *app = ud;
   bool lmouse = app->mdown;
+  char statusbar[256];
   // qwindow_make_current(app->win);
 
   bool redraw = app->doredraw;
-  bool relay = /*newevents > 0 ||*/ app->dorelay || app->needs_redraw || true;
+  bool relay = /*newevents > 0 ||*/ app->dorelay || app->needs_redraw;
 
   Clay_RenderCommandArray render_commands = {0};
   if (relay) {
@@ -446,8 +463,6 @@ void redraw(void *ud) {
                    },
                .backgroundColor = contentBackgroundColor,
            }) {
-        // NewSubmenu("File", {});
-
         Clay_ElementId Button_el = CLAY_ID("FileButton");
         static bool MenuVisible = false;
         static bool ButtonHover = false;
@@ -462,39 +477,63 @@ void redraw(void *ud) {
                             .backgroundColor = ButtonColor,
                             .cornerRadius = CLAY_CORNER_RADIUS(4),
                         }) {
-          Clay_ElementId Menu_el = CLAY_ID("FileMenu");
-          bool MenuHover = Clay_PointerOver(Menu_el);
+          CLAY_TEXT(CLAY_STRING("Go"), CLAY_TEXT_CONFIG({
+                                           .fontId = 0,
+                                           .fontSize = 12,
+                                           .textColor = {255, 255, 255, 255},
+                                       }));
           if (ButtonHover && lmouse)
-            MenuVisible = true;
-          else if (MenuVisible && !ButtonHover && !MenuHover && lmouse)
-            MenuVisible = false;
-          CLAY_TEXT(CLAY_STRING("File"), CLAY_TEXT_CONFIG({
-                                             .fontId = 0,
-                                             .fontSize = 12,
-                                             .textColor = {255, 255, 255, 255},
-                                         }));
-          if (MenuVisible) {
-            CLAY(
-                Menu_el,
-                {
-                    .floating =
-                        {
-                            .attachTo = CLAY_ATTACH_TO_PARENT,
-                            .attachPoints = {.parent =
-                                                 CLAY_ATTACH_POINT_LEFT_BOTTOM},
-                        },
-                    .layout =
-                        {
-                            .padding = {0, 0, 0, 0},
-                            .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                            .sizing = {.width = CLAY_SIZING_FIXED(200)},
-                        },
-                    .backgroundColor = {40, 40, 40, 255},
-                    .cornerRadius = CLAY_CORNER_RADIUS(8),
-                }) {}
-            // sub
-          }
+            luaL_dostring(app->L, lua_cmd);
         }
+
+        CLAY_TEXT(((Clay_String){
+                      .chars = app->buffer,
+                      .length = app->nbuffer,
+                      .isStaticallyAllocated = true,
+                  }),
+                  CLAY_TEXT_CONFIG({
+                      .fontId = 0,
+                      .fontSize = 12,
+                      .textColor = {255, 255, 255, 255},
+                  }));
+      }
+
+      CLAY(CLAY_ID("TextBox"),
+           {
+               .layout =
+                   {
+                       .sizing =
+                           {
+                               .height = CLAY_SIZING_GROW(0),
+                               .width = CLAY_SIZING_GROW(0),
+                           },
+                   },
+           }) {}
+
+      CLAY(CLAY_ID("BottomBar"),
+           {
+               .layout =
+                   {
+                       .sizing =
+                           {
+                               .height = CLAY_SIZING_FIXED(14),
+                               .width = CLAY_SIZING_GROW(0),
+                           },
+                   },
+               .backgroundColor = {70, 70, 70, 255},
+           }) {
+        int nstatusbar =
+            snprintf(statusbar, sizeof(statusbar), "nchars: %d", app->nbuffer);
+        CLAY_TEXT(((Clay_String){
+                      .chars = statusbar,
+                      .length = nstatusbar,
+                      .isStaticallyAllocated = true,
+                  }),
+                  CLAY_TEXT_CONFIG({
+                      .fontId = 0,
+                      .fontSize = 12,
+                      .textColor = {255, 255, 255, 255},
+                  }));
       }
     }
 
@@ -531,7 +570,7 @@ void try_redraw(app_t *app) {
   if (app->needs_redraw) {
     redraw(app);
   } else {
-    app->doredraw = true;
+    app->dorelay = true;
   }
 }
 
@@ -542,6 +581,9 @@ void resize(void *ud, int width, int height) {
   app->aspect_ratio = qcam_set_view(&app->cam, width, height);
 
   Clay_SetLayoutDimensions((Clay_Dimensions){.width = width, .height = height});
+  qlayout_renderer_resize(app->rend, width, height);
+
+  try_redraw(app);
 }
 
 void mouse_move(void *ud, float x, float y) {
@@ -558,6 +600,38 @@ void mouse_down(void *ud, int down) {
   app->mdown = down;
   Clay_SetPointerState((Clay_Vector2){.x = app->mpos_x, .y = app->mpos_y},
                        app->mdown);
+  try_redraw(app);
+}
+
+void key_down(void *ud, uint32_t keysym) {
+  app_t *app = ud;
+  // apr_file_printf(app->err, "Key pressed: %u\n", keysym);
+
+  switch (keysym) {
+  case XKB_KEY_BackSpace:
+    if (app->nbuffer > 0) {
+      app->nbuffer -= 1;
+      app->buffer[app->nbuffer] = '\0';
+    }
+    break;
+  case XKB_KEY_Shift_L:
+  case XKB_KEY_Shift_R:
+    break;
+  case XKB_KEY_Control_L:
+  case XKB_KEY_Control_R:
+    break;
+  case XKB_KEY_Caps_Lock:
+    break;
+  case XKB_KEY_Return:
+    break;
+  default:
+    if (app->nbuffer < sizeof(app->buffer)) {
+      app->buffer[app->nbuffer] = (char)keysym;
+      app->nbuffer += 1;
+    }
+    break;
+  }
+
   try_redraw(app);
 }
 
@@ -580,7 +654,11 @@ int main(int argc, const char *const argv[]) {
       .dorelay = true,
       .doredraw = true,
       .lastframe = apr_time_now(),
+      .L = luaL_newstate(),
   };
+
+  luaL_openlibs(app.L);
+  lua_clay_openlibs(app.L);
 
   qwindow_interface_t interface = {
       .width = app.width,
@@ -592,6 +670,7 @@ int main(int argc, const char *const argv[]) {
       .resize = resize,
       .mouse_move = mouse_move,
       .mouse_down = mouse_down,
+      .key_down = key_down,
   };
 
   qwindow_init(&app.win, pool, &interface);
@@ -603,6 +682,8 @@ int main(int argc, const char *const argv[]) {
   }
 
   while (1) {
+    qlayout_renderer_pre(app.rend);
+
     if (qwindow_pre(app.win))
       continue;
 

@@ -141,11 +141,21 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
   qwindow_t *win = data;
 
   if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-    xkb_keysym_t sym = xkb_state_key_get_one_sym(win->xkb_state, key + 8);
+    // xkb_keysym_t sym = xkb_state_key_get_one_sym(win->xkb_state, key + 8);
 
-    char name[64];
-    xkb_keysym_get_name(sym, name, sizeof(name));
-    apr_file_printf(win->i.err, "Key pressed: %s\n", name);
+    const xkb_keysym_t *syms;
+    int nsyms = xkb_state_key_get_syms(win->xkb_state, key + 8, &syms);
+    if (nsyms > 1) {
+      apr_file_printf(win->i.err, "Keys pressed: ");
+      for (int k = 0; k < nsyms; ++k)
+        apr_file_printf(win->i.err, "%u ", syms[k]);
+      apr_file_printf(win->i.err, "\n");
+    }
+
+    // char name[64];
+    // xkb_keysym_get_name(sym, name, sizeof(name));
+    if (win->i.key_down)
+      win->i.key_down(win->i.ud, syms[0]);
   }
 }
 

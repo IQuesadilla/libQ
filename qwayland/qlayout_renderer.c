@@ -37,6 +37,7 @@ struct qlayout_renderer {
   apr_hash_t *drawunits;
   apr_pool_t *pool;
   apr_file_t *err;
+  bool resize_font;
 };
 
 /*
@@ -235,9 +236,40 @@ Clay_Dimensions SDL_MeasureText(Clay_StringSlice text,
   return (Clay_Dimensions){(float)width, (float)height};
 }
 
+void HandleClayErrors(Clay_ErrorData errorData);
+
+void ReinitClay(qlayout_renderer_t *rend) {
+  uint32_t clayMemorySize = Clay_MinMemorySize();
+  apr_file_printf(rend->err, "Clay Size: %u\n", clayMemorySize);
+  rend->clay_cxt = Clay_Initialize(
+      (Clay_Arena){
+          .memory = apr_palloc(rend->pool, clayMemorySize),
+          .capacity = clayMemorySize,
+      },
+      (Clay_Dimensions){
+          .width = rend->w,
+          .height = rend->h,
+      },
+      (Clay_ErrorHandler){
+          .errorHandlerFunction = HandleClayErrors,
+          .userData = rend,
+      });
+  Clay_SetCurrentContext(rend->clay_cxt);
+  Clay_SetMeasureTextFunction(SDL_MeasureText, rend);
+  Clay_ResetMeasureTextCache();
+}
+
 void HandleClayErrors(Clay_ErrorData errorData) {
   qlayout_renderer_t *rend = errorData.userData;
-  apr_file_printf(rend->err, "%s", errorData.errorText.chars);
+  if (errorData.errorType ==
+      CLAY_ERROR_TYPE_TEXT_MEASUREMENT_CAPACITY_EXCEEDED) {
+
+    apr_file_printf(rend->err, "Reset Text Cache\n");
+    Clay_ResetMeasureTextCache();
+    rend->resize_font = true;
+  } else {
+    apr_file_printf(rend->err, "%s\n", errorData.errorText.chars);
+  }
 }
 
 /*
@@ -325,21 +357,7 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
 
   rend->fonts[0] = font;
 
-  uint32_t clayMemorySize = Clay_MinMemorySize();
-  rend->clay_cxt = Clay_Initialize(
-      (Clay_Arena){
-          .memory = apr_palloc(rend->pool, clayMemorySize),
-          .capacity = clayMemorySize,
-      },
-      (Clay_Dimensions){
-          .width = rend->w,
-          .height = rend->h,
-      },
-      (Clay_ErrorHandler){
-          .errorHandlerFunction = HandleClayErrors,
-          .userData = rend,
-      });
-  Clay_SetMeasureTextFunction(SDL_MeasureText, rend);
+  ReinitClay(rend);
 
   *newrend = rend;
 
@@ -454,4 +472,19 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
     }
   }
   return true;
+}
+
+int qlayout_renderer_pre(qlayout_renderer_t *rend) {
+  if (rend->resize_font) {
+    int32_t wc = Clay_GetMaxMeasureTextCacheWordCount();
+    Clay_SetMaxMeasureTextCacheWordCount(wc * 2);
+    ReinitClay(rend);
+    rend->resize_font = false;
+  }
+  return 0;
+}
+
+void qlayout_renderer_resize(qlayout_renderer_t *rend, float w, float h) {
+  rend->w = w;
+  rend->h = h;
 }
