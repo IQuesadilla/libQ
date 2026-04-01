@@ -366,7 +366,7 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
 
 bool qlayout_renderer_clay(qlayout_renderer_t *rend,
                            Clay_RenderCommandArray *rcommands) {
-  bool changed = rcommands->length != rend->prevcmdlen || true;
+  bool changed = rcommands->length != rend->prevcmdlen;
   // bool validScissor = false;
   // Clay_BoundingBox currentScissor = {0};
   for (size_t i = 0; i < rcommands->length; i++) {
@@ -485,6 +485,7 @@ int qlayout_renderer_pre(qlayout_renderer_t *rend) {
 }
 
 void qlayout_renderer_resize(qlayout_renderer_t *rend, float w, float h) {
+  glViewport(0, 0, w, h);
   rend->w = w;
   rend->h = h;
 }

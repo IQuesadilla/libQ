@@ -17,11 +17,6 @@
 #include "lua_clay.h"
 #include "qlayout_renderer.h"
 
-static const char lua_cmd[] = "\
-layout.log(\"hello\")\
-print(layout.add(2, 3))\
-";
-
 static const char basic_colored_vert[] = "\
 attribute vec3 aPos; \n\
 attribute vec3 aColor; \n\
@@ -210,6 +205,7 @@ struct app {
   int nbuffer;
 
   lua_State *L;
+  lua_clay_t *lc;
 };
 typedef struct app app_t;
 
@@ -332,63 +328,62 @@ static void init_egl(struct app *app) {
   app->shaders.cube.ProgID = CubeProgID;
 }
 
-static void render(app_t *app, uint64_t dT,
-                   Clay_RenderCommandArray *render_commands) {
-  glViewport(0, 0, app->width, app->height);
-  // glClearColor(0.1f, 0.2f, 0.6f, 1.0f);
-  // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+/*
+static bool render(app_t *app, uint64_t dT,
+               Clay_RenderCommandArray *render_commands) {
+// glClearColor(0.1f, 0.2f, 0.6f, 1.0f);
+// glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  if (qlayout_renderer_clay(app->rend, render_commands)) {
-    /*
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    // glEnable(GL_CULL_FACE);
+if () {
+glEnable(GL_DEPTH_TEST);
+glDepthFunc(GL_LESS);
+// glEnable(GL_CULL_FACE);
 
-    qcam_input_update(&app->cam, ((float)dT) / 1e6);
+qcam_input_update(&app->cam, ((float)dT) / 1e6);
 
-    glUseProgram(app->shaders.cube.ProgID);
-    glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.PosVBO);
-    glEnableVertexAttribArray(app->shaders.cube.PosLoc);
-    glVertexAttribPointer(app->shaders.cube.PosLoc, 3, GL_FLOAT, GL_FALSE, 0,
-                          0);
+glUseProgram(app->shaders.cube.ProgID);
+glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.PosVBO);
+glEnableVertexAttribArray(app->shaders.cube.PosLoc);
+glVertexAttribPointer(app->shaders.cube.PosLoc, 3, GL_FLOAT, GL_FALSE, 0,
+                      0);
 
-    glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.ColorVBO);
-    glEnableVertexAttribArray(app->shaders.cube.ColorLoc);
-    glVertexAttribPointer(app->shaders.cube.ColorLoc, 3, GL_FLOAT, GL_FALSE, 0,
-                          0);
+glBindBuffer(GL_ARRAY_BUFFER, app->shaders.cube.ColorVBO);
+glEnableVertexAttribArray(app->shaders.cube.ColorLoc);
+glVertexAttribPointer(app->shaders.cube.ColorLoc, 3, GL_FLOAT, GL_FALSE, 0,
+                      0);
 
-    static float angle = 0.f;
-    mat4 model, view;
-    glm_mat4_identity(model);
-    glm_translate(model, (vec3){0.f, 0.f, -50.f});
-    glm_scale(model, (vec3){10.f, 10.f, 10.f});
-    glm_rotate(model, angle, (vec3){0.f, 1.f, 0.f});
-    angle += 0.0000006 * ((double)dT);
-    qcam_get_view(&app->cam, view);
-    qcam_get_proj(&app->cam, app->aspect_ratio, 0.1f, 1000.f);
+static float angle = 0.f;
+mat4 model, view;
+glm_mat4_identity(model);
+glm_translate(model, (vec3){0.f, 0.f, -50.f});
+glm_scale(model, (vec3){10.f, 10.f, 10.f});
+glm_rotate(model, angle, (vec3){0.f, 1.f, 0.f});
+angle += 0.0000006 * ((double)dT);
+qcam_get_view(&app->cam, view);
+qcam_get_proj(&app->cam, app->aspect_ratio, 0.1f, 1000.f);
 
-    static bool dump = true;
-    if (dump) {
-      // glm_mat4_print(model, stderr);
-      // glm_mat4_print(view, stderr);
-      // glm_mat4_print(app->cam.ProjectionMatrix, stderr);
-      apr_file_printf(app->err, "%d %d\n", app->shaders.cube.PosLoc,
-                      app->shaders.cube.ColorLoc);
-      apr_file_printf(app->err, "%d %d %d\n", app->shaders.cube.modelLoc,
-                      app->shaders.cube.viewLoc, app->shaders.cube.projLoc);
-      dump = false;
-    }
+static bool dump = true;
+if (dump) {
+  // glm_mat4_print(model, stderr);
+  // glm_mat4_print(view, stderr);
+  // glm_mat4_print(app->cam.ProjectionMatrix, stderr);
+  apr_file_printf(app->err, "%d %d\n", app->shaders.cube.PosLoc,
+                  app->shaders.cube.ColorLoc);
+  apr_file_printf(app->err, "%d %d %d\n", app->shaders.cube.modelLoc,
+                  app->shaders.cube.viewLoc, app->shaders.cube.projLoc);
+  dump = false;
+}
 
-    glUniformMatrix4fv(app->shaders.cube.modelLoc, 1, GL_FALSE, (float *)model);
-    glUniformMatrix4fv(app->shaders.cube.viewLoc, 1, GL_FALSE, (float *)view);
-    glUniformMatrix4fv(app->shaders.cube.projLoc, 1, GL_FALSE,
-                       (float *)app->cam.ProjectionMatrix);
+glUniformMatrix4fv(app->shaders.cube.modelLoc, 1, GL_FALSE, (float *)model);
+glUniformMatrix4fv(app->shaders.cube.viewLoc, 1, GL_FALSE, (float *)view);
+glUniformMatrix4fv(app->shaders.cube.projLoc, 1, GL_FALSE,
+                   (float *)app->cam.ProjectionMatrix);
 
-    GLenum err;
-    while ((err = glGetError()) != GL_NO_ERROR)
-      apr_file_printf(app->err, "GL ERR %x\n", err);
+GLenum err;
+while ((err = glGetError()) != GL_NO_ERROR)
+  apr_file_printf(app->err, "GL ERR %x\n", err);
 
-    glDrawArrays(GL_TRIANGLES, 0, 12 * 3);
+glDrawArrays(GL_TRIANGLES, 0, 12 * 3);
 
 glDisable(GL_DEPTH_TEST);
 // glDisable(GL_CULL_FACE);
@@ -398,21 +393,22 @@ glBindBuffer(GL_ARRAY_BUFFER, app->shaders.overlay.VBO);
 // GLint aPos = glGetAttribLocation(rend->programID, "aPos");
 glEnableVertexAttribArray(app->shaders.overlay.inPositionLoc);
 glVertexAttribPointer(app->shaders.overlay.inPositionLoc, 2, GL_FLOAT,
-                      GL_FALSE, 0, 0);
+                  GL_FALSE, 0, 0);
 
 float mpos_x = app->mpos_x, mpos_y = app->mpos_y;
 glUniform4f(app->shaders.overlay.fragColorLoc, 10.f, 10.f, 10.f, 255.f);
 glUniform4f(app->shaders.overlay.inRectLoc, mpos_x - 20.f, mpos_y - 20.f,
-            40.f, 40.f);
+        40.f, 40.f);
 glUniform2f(app->shaders.overlay.screenLoc, app->width, app->height);
 glUniform1f(app->shaders.overlay.cornerRadiusLoc, 10.f);
 
 glDrawArrays(GL_TRIANGLES, 0, 6);
-*/
 
-    qwindow_swap(app->win);
-  }
+return true;
 }
+return false;
+}
+*/
 
 void redraw(void *ud) {
   app_t *app = ud;
@@ -482,8 +478,7 @@ void redraw(void *ud) {
                                            .fontSize = 12,
                                            .textColor = {255, 255, 255, 255},
                                        }));
-          if (ButtonHover && lmouse)
-            luaL_dostring(app->L, lua_cmd);
+          // if (ButtonHover && lmouse)
         }
 
         CLAY_TEXT(((Clay_String){
@@ -508,7 +503,9 @@ void redraw(void *ud) {
                                .width = CLAY_SIZING_GROW(0),
                            },
                    },
-           }) {}
+           }) {
+        lua_clay_relay(app->lc);
+      }
 
       CLAY(CLAY_ID("BottomBar"),
            {
@@ -541,15 +538,16 @@ void redraw(void *ud) {
     app->dorelay = false;
   }
 
+  app->needs_redraw = true;
   if (redraw) {
-    uint64_t now = apr_time_now();
-    render(app, now - app->lastframe, &render_commands);
-    app->lastframe = now;
+    // uint64_t now = apr_time_now();
+    if (qlayout_renderer_clay(app->rend, &render_commands)) {
+      qwindow_swap(app->win);
+      // app->lastframe = now;
 
-    app->doredraw = false;
-    app->needs_redraw = false;
-  } else {
-    app->needs_redraw = true;
+      app->doredraw = false;
+      app->needs_redraw = false;
+    }
   }
 
   app->frames++;
@@ -658,7 +656,7 @@ int main(int argc, const char *const argv[]) {
   };
 
   luaL_openlibs(app.L);
-  lua_clay_openlibs(app.L);
+  lua_clay_openlibs(&app.lc, app.L, pool);
 
   qwindow_interface_t interface = {
       .width = app.width,
