@@ -299,7 +299,7 @@ static void request_frame(qwindow_t *win) {
   wl_callback_add_listener(win->frame_cb, &frame_listener, win);
 }
 
-static apr_status_t qwindow_event(apr_file_t *file, void *ud) {
+static apr_status_t qwindow_event(const apr_pollfd_t *pfd, void *ud) {
   qwindow_t *win = ud;
   win->cancel_this_frame = false;
 
@@ -313,6 +313,26 @@ static apr_status_t qwindow_event(apr_file_t *file, void *ud) {
 
     if (win->i.redraw)
       win->i.redraw(win->i.ud);
+  }
+
+  return APR_SUCCESS;
+}
+
+static int qwindow_pre(void *ud) {
+  qwindow_t *win = ud;
+  if (win->cancel_this_frame) {
+    wl_display_cancel_read(win->display);
+  }
+
+  wl_display_dispatch_pending(win->display);
+
+  wl_display_flush(win->display);
+
+  win->cancel_this_frame = true;
+
+  if (wl_display_prepare_read(win->display) == -1) {
+    wl_display_dispatch_pending(win->display);
+    return 1;
   }
 
   return APR_SUCCESS;
@@ -417,26 +437,9 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
   apr_event_add_file(win->i.loop, win->wayland_file, win->pool, APR_POLLIN,
                      qwindow_event, win);
 
+  apr_event_add_prerun(win->i.loop, qwindow_pre, win);
+
   *newwin = win;
-
-  return 0;
-}
-
-int qwindow_pre(qwindow_t *win) {
-  if (win->cancel_this_frame) {
-    wl_display_cancel_read(win->display);
-  }
-
-  wl_display_dispatch_pending(win->display);
-
-  wl_display_flush(win->display);
-
-  win->cancel_this_frame = true;
-
-  if (wl_display_prepare_read(win->display) == -1) {
-    wl_display_dispatch_pending(win->display);
-    return 1;
-  }
 
   return 0;
 }

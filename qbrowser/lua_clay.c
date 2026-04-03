@@ -291,92 +291,62 @@ void lua_clay_openlibs(lua_clay_t **newlc, lua_State *L, apr_pool_t *parent) {
   apr_pool_create(&pool, parent);
   lua_clay_t *lc = apr_pcalloc(pool, sizeof(lua_clay_t));
   lc->pool = pool;
+  lc->L = L;
+  *newlc = lc;
 
   apr_pool_create(&lc->rpool, lc->pool);
 
-  /*
-  // * Get package.preload *
-  lua_getglobal(L, "package");
-  lua_getfield(L, -1, "preload");
-
-  // * preload["window"] = luaopen_app *
-  lua_pushcfunction(L, luaopen_window);
-  lua_setfield(L, -2, "window");
-
-  // * now actually create the module *
-  lua_pushcfunction(L, luaopen_window);
-  lua_call(L, 0, 1); // returns module table
-
-  lua_setglobal(L, "window");
-  */
-
-  lua_newtable(L); // window table
-
-  // push window pointer as upvalue
-  lua_pushlightuserdata(L, lc);
-  lua_pushcclosure(L, l_window_item, 1);
-  lua_setfield(L, -2, "item");
-
-  lua_pushcclosure(L, l_window_sizing_fixed, 0);
-  lua_setfield(L, -2, "sizing_fixed");
-
-  lua_pushcclosure(L, l_window_sizing_grow, 0);
-  lua_setfield(L, -2, "sizing_grow");
-
-  lua_pushlightuserdata(L, lc);
-  lua_pushcclosure(L, l_window_is_hovered, 1);
-  lua_setfield(L, -2, "is_hovered");
-
-  lua_pushlightuserdata(L, lc);
-  lua_pushcclosure(L, l_window_text, 1);
-  lua_setfield(L, -2, "text");
-
-  lua_setglobal(L, "window");
-
-  /* cleanup stack */
-  // lua_pop(L, 2);
-
-  apr_file_t *main_lua;
-  apr_file_open(&main_lua, "./main.lua", APR_FOPEN_READ, APR_FPROT_OS_DEFAULT,
-                lc->pool);
-
-  apr_size_t nlua_cmd = 0;
-  char lua_cmd[16384];
-  apr_file_read_full(main_lua, lua_cmd, sizeof(lua_cmd), &nlua_cmd);
-  lua_cmd[nlua_cmd] = '\0';
-  apr_file_close(main_lua);
-
-  if (luaL_dostring(L, lua_cmd) != LUA_OK) {
-    fprintf(stderr, "Lua error: %s\n", lua_tostring(L, -1));
-    return;
-  }
-
-  lua_getglobal(L, "window"); // push layout table
-  lc->window_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-  lua_rawgeti(L, LUA_REGISTRYINDEX, lc->window_ref); // push window
-
-  lua_pushboolean(L, 0);
-  lua_setfield(L, -2, "mdown"); // pops bool, sets field
-
-  lua_getfield(L, -1, "draw"); // push window.on_event
-
-  if (!lua_isfunction(L, -1)) {
-    lua_pop(L, 2);
-    fprintf(stderr, "window.draw not defined\n");
-    return; // not defined
-  }
-
-  lc->do_draw_ref = luaL_ref(L, LUA_REGISTRYINDEX); // pops function
-  lua_pop(L, 1);                                    // pop window table
-
+  lua_newtable(lc->L); // window table
+  lc->window_ref = luaL_ref(lc->L, LUA_REGISTRYINDEX);
+  lua_rawgeti(lc->L, LUA_REGISTRYINDEX, lc->window_ref);
   // cleanup: luaL_unref(L, LUA_REGISTRYINDEX, window->do_draw_ref);
 
-  lc->L = L;
-  *newlc = lc;
+  lua_pushlightuserdata(lc->L, lc);
+  lua_pushcclosure(lc->L, l_window_item, 1);
+  lua_setfield(lc->L, -2, "item");
+
+  lua_pushcclosure(lc->L, l_window_sizing_fixed, 0);
+  lua_setfield(lc->L, -2, "sizing_fixed");
+
+  lua_pushcclosure(lc->L, l_window_sizing_grow, 0);
+  lua_setfield(lc->L, -2, "sizing_grow");
+
+  lua_pushlightuserdata(lc->L, lc);
+  lua_pushcclosure(lc->L, l_window_is_hovered, 1);
+  lua_setfield(lc->L, -2, "is_hovered");
+
+  lua_pushlightuserdata(lc->L, lc);
+  lua_pushcclosure(lc->L, l_window_text, 1);
+  lua_setfield(lc->L, -2, "text");
+
+  lua_pushboolean(lc->L, 0);
+  lua_setfield(lc->L, -2, "mdown"); // pops bool, sets field
+
+  lua_setglobal(lc->L, "window");
+
+  lc->do_draw_ref = LUA_REFNIL;
+}
+
+int lc_get_refs(lua_clay_t *lc) {
+  lua_rawgeti(lc->L, LUA_REGISTRYINDEX, lc->window_ref); // push window
+  lua_getfield(lc->L, -1, "draw");                       // push window.on_event
+
+  if (!lua_isfunction(lc->L, -1)) {
+    lua_pop(lc->L, 2);
+    fprintf(stderr, "window.draw not defined\n");
+    return -1; // not defined
+  }
+
+  lc->do_draw_ref = luaL_ref(lc->L, LUA_REGISTRYINDEX); // pops function
+  lua_pop(lc->L, 1);                                    // pop window table
+  return 0;
 }
 
 int lua_clay_relay(lua_clay_t *lc, bool mdown) {
   lua_State *L = lc->L;
+
+  if (lc->do_draw_ref == LUA_REFNIL)
+    return 0;
 
   apr_pool_clear(lc->rpool);
   lc->id_stack = apr_array_make(lc->rpool, 16, sizeof(char *));

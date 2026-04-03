@@ -37,6 +37,7 @@ struct qlayout_renderer {
   apr_hash_t *drawunits;
   apr_pool_t *pool;
   apr_file_t *err;
+  apr_loop_t *loop;
   bool resize_font;
 };
 
@@ -272,12 +273,23 @@ void HandleClayErrors(Clay_ErrorData errorData) {
   }
 }
 
+static int qlayout_renderer_pre(void *ud) {
+  qlayout_renderer_t *rend = ud;
+  if (rend->resize_font) {
+    int32_t wc = Clay_GetMaxMeasureTextCacheWordCount();
+    Clay_SetMaxMeasureTextCacheWordCount(wc * 2);
+    ReinitClay(rend);
+    rend->resize_font = false;
+  }
+  return 0;
+}
+
 /*
  * ------ PUBLIC ------
  */
 
 int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
-                          apr_file_t *err) {
+                          apr_loop_t *loop, apr_file_t *err) {
   apr_pool_t *pool;
   apr_pool_create(&pool, parent);
   qlayout_renderer_t *rend = apr_pcalloc(pool, sizeof(qlayout_renderer_t));
@@ -288,6 +300,7 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
   rend->w = 640;
   rend->h = 480;
   rend->err = err;
+  rend->loop = loop;
 
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -358,6 +371,8 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
   rend->fonts[0] = font;
 
   ReinitClay(rend);
+
+  apr_event_add_prerun(rend->loop, qlayout_renderer_pre, rend);
 
   *newrend = rend;
 
@@ -472,16 +487,6 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
     }
   }
   return true;
-}
-
-int qlayout_renderer_pre(qlayout_renderer_t *rend) {
-  if (rend->resize_font) {
-    int32_t wc = Clay_GetMaxMeasureTextCacheWordCount();
-    Clay_SetMaxMeasureTextCacheWordCount(wc * 2);
-    ReinitClay(rend);
-    rend->resize_font = false;
-  }
-  return 0;
 }
 
 void qlayout_renderer_resize(qlayout_renderer_t *rend, float w, float h) {

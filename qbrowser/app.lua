@@ -23,8 +23,8 @@ window.draw = function()
         },
         backgroundColor = { r = 90, g = 90, b = 90 },
         drawchildren = function()
-          local hovered = window.is_hovered("go")
-          if hovered and not window.mdown and mdown_old then
+          local go_hovered = window.is_hovered("go")
+          if go_hovered and not window.mdown and mdown_old then
             print("pressed")
           end
           window.item {
@@ -32,12 +32,40 @@ window.draw = function()
             layout = {
               padding = { t = 3, b = 3, r = 6, l = 6 },
             },
-            backgroundColor = hovered and
+            backgroundColor = go_hovered and
                 { r = 150, g = 90, b = 230 } or
                 { r = 100, g = 100, b = 100 },
             cornerRadius = { tl = 6 },
             drawchildren = function()
               window.text("Go")
+            end
+          }
+
+          window.item {
+            name = "spacer",
+            layout = {
+              sizing = {
+                width = window.sizing_grow(0),
+                height = window.sizing_grow(0),
+              },
+            },
+          }
+
+          local exit_hovered = window.is_hovered("exit")
+          if exit_hovered and not window.mdown and mdown_old then
+            os.exit(true)
+          end
+          window.item {
+            name = "exit",
+            layout = {
+              padding = { t = 3, b = 3, r = 6, l = 6 },
+            },
+            backgroundColor = exit_hovered and
+                { r = 230, g = 20, b = 20 } or
+                { r = 150, g = 20, b = 20 },
+            cornerRadius = { tl = 6 },
+            drawchildren = function()
+              window.text("X")
             end
           }
         end

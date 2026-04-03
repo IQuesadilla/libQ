@@ -1,6 +1,7 @@
 #include <apr.h>
 #include <apr_general.h>
 #include <apr_pools.h>
+#include <apr_strings.h>
 
 #include <cglm/cglm.h>
 
@@ -14,6 +15,7 @@
 
 #include <xkbcommon/xkbcommon.h>
 
+#include "downloader.h"
 #include "lua_clay.h"
 #include "qlayout_renderer.h"
 
@@ -38,7 +40,7 @@ struct app {
   char buffer[1024];
   int nbuffer;
 
-  lua_State *L;
+  lua_State *L, *co;
   lua_clay_t *lc;
 };
 typedef struct app app_t;
@@ -69,117 +71,9 @@ void redraw(void *ud) {
     redraw = true;
 
     Clay_BeginLayout();
-
-    Clay_Sizing layoutExpand = {.width = CLAY_SIZING_GROW(0),
-                                .height = CLAY_SIZING_GROW(0)};
-    Clay_Color contentBackgroundColor = {90, 90, 90, 255};
-
     lua_clay_relay(app->lc, lmouse);
-
-    // char id[] = ;
-    // Clay_String sid = {.chars = id, .length = strlen(id)};
-    /*
-    CLAY(CLAY_ID("OuterContainer"),
-        {
-            .backgroundColor = {30, 30, 30, 255},
-            .layout =
-                {
-                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                    .sizing = layoutExpand,
-                    .padding = CLAY_PADDING_ALL(0),
-                    .childGap = 0,
-                },
-        }) {
-        CLAY(CLAY_ID("HeaderBar"),
-            {
-                .layout =
-                    {
-                        .sizing =
-                            {
-                                .height = CLAY_SIZING_FIXED(30),
-                                .width = CLAY_SIZING_GROW(0),
-                            },
-                        .padding = {4, 4, 0, 0},
-                        .childGap = 16,
-                        .childAlignment = {.y = CLAY_ALIGN_Y_CENTER},
-                    },
-                .backgroundColor = contentBackgroundColor,
-            }) {
-        Clay_ElementId Button_el = CLAY_ID("FileButton");
-        bool ButtonHover = Clay_PointerOver(Button_el);
-        Clay_Color ButtonColor = ButtonHover ? (Clay_Color){255, 100, 100, 255}
-                                                : (Clay_Color){100, 100, 100,
-    255}; CLAY(Button_el, { .layout =
-                                {
-                                    .padding = {6, 6, 3, 3},
-                                },
-                            .backgroundColor = ButtonColor,
-                            .cornerRadius = CLAY_CORNER_RADIUS(4),
-                        }) {
-            CLAY_TEXT(CLAY_STRING("Go"), CLAY_TEXT_CONFIG({
-                                            .fontId = 0,
-                                            .fontSize = 12,
-                                            .textColor = {255, 255, 255, 255},
-                                        }));
-            if (ButtonHover && lmouse)
-            fprintf(stderr, "here\n");
-        }
-
-        CLAY_TEXT(((Clay_String){
-                        .chars = app->buffer,
-                        .length = app->nbuffer,
-                        .isStaticallyAllocated = true,
-                    }),
-                    CLAY_TEXT_CONFIG({
-                        .fontId = 0,
-                        .fontSize = 12,
-                        .textColor = {255, 255, 255, 255},
-                    }));
-        }
-
-        CLAY(CLAY_ID("TextBox"),
-            {
-                .layout =
-                    {
-                        .sizing =
-                            {
-                                .height = CLAY_SIZING_GROW(0),
-                                .width = CLAY_SIZING_GROW(0),
-                            },
-                    },
-            }) {
-        lua_clay_relay(app->lc);
-        }
-
-        CLAY(CLAY_ID("BottomBar"),
-            {
-                .layout =
-                    {
-                        .sizing =
-                            {
-                                .height = CLAY_SIZING_FIXED(14),
-                                .width = CLAY_SIZING_GROW(0),
-                            },
-                    },
-                .backgroundColor = {70, 70, 70, 255},
-            }) {
-        int nstatusbar =
-            snprintf(statusbar, sizeof(statusbar), "nchars: %d", app->nbuffer);
-        CLAY_TEXT(((Clay_String){
-                        .chars = statusbar,
-                        .length = nstatusbar,
-                        .isStaticallyAllocated = true,
-                    }),
-                    CLAY_TEXT_CONFIG({
-                        .fontId = 0,
-                        .fontSize = 12,
-                        .textColor = {255, 255, 255, 255},
-                    }));
-        }
-    }
-    */
-
     render_commands = Clay_EndLayout();
+
     app->dorelay = false;
   }
 
@@ -278,8 +172,54 @@ void key_down(void *ud, uint32_t keysym) {
   try_redraw(app);
 }
 
+struct ReaderState {
+  data_node_t *cur;
+};
+
+const char *reader(lua_State *L, void *data, size_t *size) {
+  struct ReaderState *rs = data;
+
+  if (!rs->cur) {
+    *size = 0;
+    return NULL;
+  }
+
+  const char *ptr = rs->cur->data;
+  *size = rs->cur->used;
+
+  rs->cur = rs->cur->next;
+  return ptr;
+}
+
+void download_handler(data_node_t *list, void *ud) {
+  app_t *app = ud;
+
+  struct ReaderState rs = {.cur = list};
+
+  if (lua_load(app->co, reader, &rs, "stream", NULL) != LUA_OK) {
+    fprintf(stderr, "load error: %s\n", lua_tostring(app->co, -1));
+    return;
+  }
+
+  int nres = 0;
+  int status = lua_resume(app->co, app->L, 0, &nres);
+  if (status == LUA_YIELD) {
+    return;
+  } else if (status == LUA_OK) {
+    lc_get_refs(app->lc);
+    try_redraw(app);
+  } else {
+    printf("Error loading app.lua: %s\n", lua_tostring(app->co, -1));
+  }
+}
+
 int main(int argc, const char *const argv[]) {
   apr_app_initialize(&argc, &argv, NULL);
+
+  if (argc != 2) {
+    fprintf(stderr, "Usage: %s url|ip:port\n", argv[0]);
+    return 0;
+  }
 
   apr_pool_t *pool;
   apr_pool_create_core(&pool);
@@ -303,6 +243,11 @@ int main(int argc, const char *const argv[]) {
   luaL_openlibs(app.L);
   lua_clay_openlibs(&app.lc, app.L, pool);
 
+  app.co = lua_newthread(app.L);
+
+  const char *url = apr_pstrcat(pool, "http://", argv[1], "/app.lua", NULL);
+  start_download(url, pool, loop, download_handler, &app);
+
   qwindow_interface_t interface = {
       .width = app.width,
       .height = app.height,
@@ -319,19 +264,12 @@ int main(int argc, const char *const argv[]) {
   qwindow_init(&app.win, pool, &interface);
   init_egl(&app);
 
-  if (qlayout_renderer_init(&app.rend, pool, app.err) < 0) {
+  if (qlayout_renderer_init(&app.rend, pool, loop, app.err) < 0) {
     apr_file_printf(app.err, "Failed Clay_GLRenderInit\n");
     exit(-1);
   }
 
-  while (1) {
-    qlayout_renderer_pre(app.rend);
-
-    if (qwindow_pre(app.win))
-      continue;
-
-    apr_event_run(loop);
-  }
+  apr_event_run(loop);
 
   apr_terminate();
   return 0;

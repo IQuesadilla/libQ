@@ -65,30 +65,6 @@
       ".",
       "-o",
       "qbrowser",
-      "downloader.c"
-    ],
-    "directory": "/work/libQ/qbrowser",
-    "file": "/work/libQ/qbrowser/downloader.c",
-    "output": "/work/libQ/qbrowser/qbrowser"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-c",
-      "-g",
-      "-I/work/libQ/qwayland/",
-      "-DLINUX",
-      "-D_REENTRANT",
-      "-D_GNU_SOURCE",
-      "-I/usr/include/apr-1",
-      "-I/usr/include/serf-1",
-      "-I/work/libQ/apr_ev/",
-      "-I",
-      "/work/root/include",
-      "-I",
-      ".",
-      "-o",
-      "qbrowser",
       "/work/libQ/apr_ev/apr_events.c"
     ],
     "directory": "/work/libQ/qbrowser",

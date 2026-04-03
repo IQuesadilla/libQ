@@ -33,6 +33,5 @@ void qwindow_make_current(qwindow_t *win);
 
 int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
                  qwindow_interface_t *ev);
-int qwindow_pre(qwindow_t *win);
 
 #endif

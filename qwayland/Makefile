@@ -9,7 +9,7 @@ LIBS := `pkg-config --libs $(PC_DEPS)`
 all: $(TARGET)
 
 $(TARGET): $(SRCS) $(HDRS)
-	gcc -shared -fPIC -o $(TARGET) $(CFLAGS) $(SRCS) $(LIBS)
+	gcc -shared -fPIC -O2 -o $(TARGET) $(CFLAGS) $(SRCS) $(LIBS)
 
 install: $(TARGET) $(HDRS)
 	cp $(TARGET) /work/root/lib
