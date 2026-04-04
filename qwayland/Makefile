@@ -1,8 +1,8 @@
 TARGET := libqwayland.so
-PC_DEPS := apr-1 wayland-client wayland-egl egl xkbcommon sdl3 sdl3-ttf
+PC_DEPS := apr-1 wayland-client wayland-cursor wayland-egl egl xkbcommon sdl3 sdl3-ttf
 SRCS := qwindow.c qcam.c xdg-shell-protocol.c qlayout_renderer.c /work/libQ/apr_ev/apr_events.c
 HDRS := qwindow.h qcam.h xdg-shell-client-protocol.h qlayout_renderer.h /work/libQ/apr_ev/apr_events.h
-INC_DIRS := -g -I/work/libQ/apr_ev
+INC_DIRS := -g -I/work/libQ/apr_ev -I/work/libQ/deps
 CFLAGS := $(INC_DIRS) `pkg-config --cflags $(PC_DEPS) glesv2`
 LIBS := `pkg-config --libs $(PC_DEPS)`
 

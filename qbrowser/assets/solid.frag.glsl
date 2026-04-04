@@ -15,8 +15,10 @@ void main() {
     vec2 d = abs(p) - (halfSize - vec2(cornerRadius));
     float dist = length(max(d, 0.0));
 
+    float a = 1.0;
     if (dist > cornerRadius)
-        discard;
+        a = clamp(1.0 + cornerRadius - dist, 0.0, 1.0);
 
-    gl_FragColor = fragColor / 256.0;
+    gl_FragColor.rgb = (fragColor / 256.0).rgb;
+    gl_FragColor.a = a;
 }

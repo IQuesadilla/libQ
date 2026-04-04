@@ -1,4 +1,5 @@
 #define CLAY_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
 #include "qlayout_renderer.h"
 
 #include <GLES2/gl2.h>
@@ -8,7 +9,9 @@
 #include <apr_file_io.h>
 #include <apr_hash.h>
 #include <apr_pools.h>
+#include <apr_strings.h>
 #include <cglm/cglm.h>
+#include <stb_image.h>
 
 struct drawunit {
   apr_pool_t *pool;
@@ -34,12 +37,17 @@ struct qlayout_renderer {
   float w, h;
   int32_t prevcmdlen;
   // drawunit_t *drawunits;
-  apr_hash_t *drawunits;
+  apr_hash_t *drawunits, *imgcache;
   apr_pool_t *pool;
   apr_file_t *err;
   apr_loop_t *loop;
   bool resize_font;
 };
+
+struct qlayout_image {
+  GLuint handle;
+};
+typedef struct qlayout_image qlayout_image_t;
 
 /*
  * ------ PRIVATE ------
@@ -161,7 +169,7 @@ static int LoadShader(apr_file_t *err, const char *vertex_source_path,
 }
 
 void Clay_GLRenderFillRoundedRect(qlayout_renderer_t *rend,
-                                  const SDL_FRect rect,
+                                  const Clay_BoundingBox rect,
                                   const float cornerRadius,
                                   const Clay_Color color) {
   glUseProgram(rend->shaders.rect.ProgID);
@@ -173,7 +181,8 @@ void Clay_GLRenderFillRoundedRect(qlayout_renderer_t *rend,
 
   glUniform4f(rend->shaders.rect.fragColorLoc, color.r, color.g, color.b,
               color.a);
-  glUniform4f(rend->shaders.rect.inRectLoc, rect.x, rect.y, rect.w, rect.h);
+  glUniform4f(rend->shaders.rect.inRectLoc, rect.x, rect.y, rect.width,
+              rect.height);
   glUniform2f(rend->shaders.rect.screenLoc, rend->w, rend->h);
   glUniform1f(rend->shaders.rect.cornerRadiusLoc, cornerRadius);
 
@@ -181,7 +190,7 @@ void Clay_GLRenderFillRoundedRect(qlayout_renderer_t *rend,
   return;
 }
 
-void Clay_GLRenderText(qlayout_renderer_t *rend, const SDL_FRect rect,
+void Clay_GLRenderText(qlayout_renderer_t *rend, const Clay_BoundingBox rect,
                        SDL_Surface *textImg) {
   glUseProgram(rend->shaders.text.ProgID);
 
@@ -202,7 +211,8 @@ void Clay_GLRenderText(qlayout_renderer_t *rend, const SDL_FRect rect,
   glVertexAttribPointer(rend->shaders.rect.inPositionLoc, 2, GL_FLOAT, GL_FALSE,
                         0, 0);
 
-  glUniform4f(rend->shaders.text.inRectLoc, rect.x, rect.y, rect.w, rect.h);
+  glUniform4f(rend->shaders.text.inRectLoc, rect.x, rect.y, rect.width,
+              rect.height);
   glUniform2f(rend->shaders.text.screenLoc, rend->w, rend->h);
   glUniform1i(rend->shaders.text.textImgLoc, 0);
 
@@ -296,6 +306,7 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
 
   rend->pool = pool;
   rend->drawunits = apr_hash_make(rend->pool);
+  rend->imgcache = apr_hash_make(rend->pool);
   rend->prevcmdlen = 0;
   rend->w = 640;
   rend->h = 480;
@@ -432,9 +443,7 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
   glDisable(GL_CULL_FACE);
   for (size_t i = 0; i < rcommands->length; i++) {
     Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
-    const Clay_BoundingBox bounding_box = rcmd->boundingBox;
-    const SDL_FRect rect = {(int)bounding_box.x, (int)bounding_box.y,
-                            (int)bounding_box.width, (int)bounding_box.height};
+    const Clay_BoundingBox rect = rcmd->boundingBox;
 
     switch (rcmd->commandType) {
     case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
@@ -477,6 +486,66 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
       break;
     }
     case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
+      const char *imgpath = rcmd->renderData.image.imageData;
+      qlayout_image_t *img =
+          apr_hash_get(rend->imgcache, imgpath, APR_HASH_KEY_STRING);
+      if (!img) {
+        int x = 0, y = 0, nchannels;
+        uint8_t *imgdata = stbi_load(imgpath, &x, &y, &nchannels, 4);
+        assert(imgdata);
+        printf("image %d %d %d %u %u %u %u\n", x, y, nchannels, imgdata[0],
+               imgdata[1], imgdata[2], imgdata[3]);
+
+        img = apr_palloc(rend->pool, sizeof(*img));
+        apr_hash_set(rend->imgcache, apr_pstrdup(rend->pool, imgpath),
+                     APR_HASH_KEY_STRING, img);
+
+        glGenTextures(1, &img->handle);
+        glBindTexture(GL_TEXTURE_2D, img->handle);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                        GL_LINEAR_MIPMAP_LINEAR);
+        // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        GLuint format, iformat;
+        if (nchannels == 4) {
+          format = GL_RGBA;
+          iformat = GL_RGBA;
+        } else {
+          format = GL_RGBA;
+          iformat = GL_RGBA;
+        }
+
+        glTexImage2D(GL_TEXTURE_2D, 0, iformat, x, y, 0, format,
+                     GL_UNSIGNED_BYTE, imgdata);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        stbi_image_free(imgdata);
+      }
+
+      glUseProgram(rend->shaders.text.ProgID);
+      glActiveTexture(GL_TEXTURE0 + 0);
+      glBindTexture(GL_TEXTURE_2D, img->handle);
+
+      glEnableVertexAttribArray(rend->shaders.rect.inPositionLoc);
+      glVertexAttribPointer(rend->shaders.rect.inPositionLoc, 2, GL_FLOAT,
+                            GL_FALSE, 0, 0);
+
+      glUniform4f(rend->shaders.text.inRectLoc, rect.x, rect.y, rect.width,
+                  rect.height);
+      glUniform2f(rend->shaders.text.screenLoc, rend->w, rend->h);
+      glUniform1i(rend->shaders.text.textImgLoc, 0);
+
+      glBindBuffer(GL_ARRAY_BUFFER, rend->shaders.rect.VBO);
+
+      // Draw texture
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+
       break;
     }
     case CLAY_RENDER_COMMAND_TYPE_CUSTOM: {

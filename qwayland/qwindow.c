@@ -3,7 +3,9 @@
 #include "xdg-shell-client-protocol.h"
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
+#include <linux/input-event-codes.h>
 #include <wayland-client.h>
+#include <wayland-cursor.h>
 #include <wayland-egl.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -21,10 +23,14 @@ struct qwindow {
   struct wl_registry *registry;
   struct wl_compositor *compositor;
   struct wl_surface *surface;
+  struct wl_shm *shm;
 
   struct wl_seat *seat;
   struct wl_pointer *pointer;
   struct wl_keyboard *keyboard;
+
+  struct wl_surface *cursor_surface;
+  struct wl_cursor_theme *cursor_theme;
 
   struct xdg_wm_base *wm_base;
   struct xdg_surface *xdg_surface;
@@ -50,6 +56,7 @@ struct qwindow {
   int can_render;
 
   bool configured;
+  bool should_drag;
 };
 
 /*
@@ -62,6 +69,19 @@ static void pointer_enter(void *data, struct wl_pointer *pointer,
   qwindow_t *win = data;
   apr_file_printf(win->i.err, "Pointer entered at %.1f %.1f\n",
                   wl_fixed_to_double(sx), wl_fixed_to_double(sy));
+
+  struct wl_cursor *cursor =
+      wl_cursor_theme_get_cursor(win->cursor_theme, "left_ptr");
+
+  struct wl_cursor_image *image = cursor->images[0];
+  struct wl_buffer *buffer = wl_cursor_image_get_buffer(image);
+
+  wl_pointer_set_cursor(pointer, serial, win->cursor_surface, image->hotspot_x,
+                        image->hotspot_y);
+
+  wl_surface_attach(win->cursor_surface, buffer, 0, 0);
+  wl_surface_damage(win->cursor_surface, 0, 0, image->width, image->height);
+  wl_surface_commit(win->cursor_surface);
 }
 
 static void pointer_leave(void *data, struct wl_pointer *pointer,
@@ -78,6 +98,8 @@ static void pointer_motion(void *data, struct wl_pointer *pointer,
   float x = wl_fixed_to_double(sx);
   float y = wl_fixed_to_double(sy);
 
+  win->should_drag = (y < 40.f);
+
   if (win->i.mouse_move)
     win->i.mouse_move(win->i.ud, x, y);
 }
@@ -89,7 +111,19 @@ static void pointer_button(void *data, struct wl_pointer *pointer,
   // apr_file_printf(win->i.err, "Button %u %s\n", button,
   // state == WL_POINTER_BUTTON_STATE_PRESSED ? "pressed"
   // : "released");
-  win->i.mouse_down(win->i.ud, state == WL_POINTER_BUTTON_STATE_PRESSED);
+
+  if (button == BTN_LEFT) {
+    if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+      win->i.mouse_down(win->i.ud, true);
+
+      if (win->should_drag) {
+        xdg_toplevel_move(win->toplevel, win->seat, serial);
+        win->i.mouse_down(win->i.ud, false);
+      }
+    } else if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
+      win->i.mouse_down(win->i.ud, false);
+    }
+  }
 }
 
 static void pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
@@ -255,6 +289,8 @@ static void registry_global(void *data, struct wl_registry *registry,
   if (strcmp(interface, wl_compositor_interface.name) == 0) {
     win->compositor =
         wl_registry_bind(registry, name, &wl_compositor_interface, 4);
+  } else if (strcmp(interface, wl_shm_interface.name) == 0) {
+    win->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
   } else if (!strcmp(interface, wl_seat_interface.name)) {
     win->seat = wl_registry_bind(registry, name, &wl_seat_interface, 1);
 
@@ -352,6 +388,10 @@ void qwindow_make_current(qwindow_t *win) {
                  win->egl_context);
 }
 
+void qwindow_set_drag(qwindow_t *win, bool should_drag) {
+  win->should_drag = should_drag;
+}
+
 int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
                  qwindow_interface_t *interface) {
   EGLint major, minor;
@@ -393,6 +433,10 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
   wl_display_roundtrip(win->display);
 
   win->surface = wl_compositor_create_surface(win->compositor);
+
+  win->cursor_theme = wl_cursor_theme_load(NULL, 24, win->shm);
+
+  win->cursor_surface = wl_compositor_create_surface(win->compositor);
 
   win->xdg_surface = xdg_wm_base_get_xdg_surface(win->wm_base, win->surface);
   xdg_surface_add_listener(win->xdg_surface, &xdg_surface_listener, win);

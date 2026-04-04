@@ -73,6 +73,7 @@ void redraw(void *ud) {
     Clay_BeginLayout();
     lua_clay_relay(app->lc, lmouse);
     render_commands = Clay_EndLayout();
+    qwindow_set_drag(app->win, lua_clay_get_drag(app->lc));
 
     app->dorelay = false;
   }
@@ -240,7 +241,18 @@ int main(int argc, const char *const argv[]) {
       .L = luaL_newstate(),
   };
 
-  luaL_openlibs(app.L);
+  // luaL_openlibs(app.L);
+  luaopen_base(app.L); // TODO: Reimplement
+  luaopen_coroutine(app.L);
+  luaopen_debug(app.L);
+  // luaopen_io(app.L);
+  luaopen_math(app.L);
+  // luaopen_os(app.L);
+  // luaopen_package(app.L);
+  luaopen_string(app.L);
+  luaopen_table(app.L);
+  luaopen_utf8(app.L);
+
   lua_clay_openlibs(&app.lc, app.L, pool);
 
   app.co = lua_newthread(app.L);

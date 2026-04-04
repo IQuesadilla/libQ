@@ -14,6 +14,8 @@ struct lua_clay {
   // char id_stack[256][256];
   apr_array_header_t *id_stack;
   int depth;
+
+  bool should_drag;
 };
 
 /*
@@ -106,6 +108,10 @@ static int l_window_item(lua_State *L) {
     }
     lua_pop(L, 1);
 
+    lua_getfield(L, -1, "childGap");
+    el.layout.childGap = luaL_optinteger(L, -1, 0);
+    lua_pop(L, 1);
+
     lua_getfield(L, -1, "layoutDirection");
     el.layout.layoutDirection = luaL_optnumber(L, -1, 0);
     lua_pop(L, 1);
@@ -170,6 +176,10 @@ static int l_window_item(lua_State *L) {
     el.backgroundColor.a = luaL_optnumber(L, -1, 255);
     lua_pop(L, 1);
   }
+  lua_pop(L, 1);
+
+  lua_getfield(L, -1, "image");
+  el.image.imageData = apr_pstrdup(lc->rpool, luaL_optstring(L, -1, NULL));
   lua_pop(L, 1);
 
   lua_getfield(L, -1, "name");
@@ -274,9 +284,18 @@ static int l_window_text(lua_State *L) {
 
   CLAY_TEXT(claytext, CLAY_TEXT_CONFIG({
                           .fontId = 0,
-                          .fontSize = 12,
+                          .fontSize = 16,
                           .textColor = {255, 255, 255, 255},
                       }));
+
+  // The table is already on top of the stack, return 1 result
+  return 0;
+}
+
+static int l_window_close(lua_State *L) {
+  // Check that the first argument is an integer
+  int rc = luaL_optinteger(L, 1, 0);
+  exit(rc);
 
   // The table is already on top of the stack, return 1 result
   return 0;
@@ -319,6 +338,10 @@ void lua_clay_openlibs(lua_clay_t **newlc, lua_State *L, apr_pool_t *parent) {
   lua_pushcclosure(lc->L, l_window_text, 1);
   lua_setfield(lc->L, -2, "text");
 
+  lua_pushlightuserdata(lc->L, lc);
+  lua_pushcclosure(lc->L, l_window_close, 1);
+  lua_setfield(lc->L, -2, "close");
+
   lua_pushboolean(lc->L, 0);
   lua_setfield(lc->L, -2, "mdown"); // pops bool, sets field
 
@@ -351,7 +374,11 @@ int lua_clay_relay(lua_clay_t *lc, bool mdown) {
   apr_pool_clear(lc->rpool);
   lc->id_stack = apr_array_make(lc->rpool, 16, sizeof(char *));
 
+  lc->should_drag = false;
+
   lua_rawgeti(L, LUA_REGISTRYINDEX, lc->window_ref); // push window
+  lua_pushboolean(L, lc->should_drag);
+  lua_setfield(L, -2, "drag");
   lua_pushboolean(L, mdown);
   lua_setfield(L, -2, "mdown");
   lua_pop(L, 1);
@@ -365,7 +392,14 @@ int lua_clay_relay(lua_clay_t *lc, bool mdown) {
     return -1;
   }
 
-  lua_touserdata(L, lua_upvalueindex(1));
+  lua_rawgeti(L, LUA_REGISTRYINDEX, lc->window_ref); // push window
+  lua_getfield(L, -1, "drag");
+  lc->should_drag = lua_toboolean(L, -1);
+  lua_pop(L, 1);
 
   return 0;
+}
+
+bool lua_clay_get_drag(lua_clay_t *lc) {
+  return lc->should_drag; //
 }

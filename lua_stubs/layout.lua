@@ -35,17 +35,20 @@
 ---@field sizing nil|Sizing
 ---@field layoutDirection nil|integer
 ---@field padding nil|Padding
+---@field childGap nil|integer
 
 ---@class Item
 ---@field name string
 ---@field layout nil|Layout
 ---@field backgroundColor nil|Color
 ---@field cornerRadius nil|CornerRadius
+---@field image nil|string
 ---@field drawchildren nil|fun(id:string):nil
 
 ---@class window
 window = {}
 
+window.drag = false
 window.mdown = false
 
 ---@param fixedSize number
@@ -73,3 +76,6 @@ function window.item(lay) end
 
 ---@param text string
 function window.text(text) end
+
+---@param rc integer
+function window.close(rc) end

@@ -3,6 +3,7 @@
 
 #include <apr.h>
 #include <apr_pools.h>
+#include <stdbool.h>
 
 #include "apr_events.h"
 
@@ -28,10 +29,12 @@ typedef struct qwindow_interface qwindow_interface_t;
 
 typedef struct qwindow qwindow_t;
 
+int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
+                 qwindow_interface_t *ev);
+
 int qwindow_swap(qwindow_t *win);
 void qwindow_make_current(qwindow_t *win);
 
-int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
-                 qwindow_interface_t *ev);
+void qwindow_set_drag(qwindow_t *win, bool should_drag);
 
 #endif
