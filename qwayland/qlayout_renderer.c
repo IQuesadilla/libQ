@@ -4,9 +4,6 @@
 #include "qlayout_renderer.h"
 
 #include <GLES2/gl2.h>
-#include <stb_truetype.h>
-// #include <SDL3_image/SDL_image.h>
-// #include <SDL3_ttf/SDL_ttf.h>
 #include <apr.h>
 #include <apr_file_io.h>
 #include <apr_hash.h>
@@ -14,6 +11,7 @@
 #include <apr_strings.h>
 #include <cglm/cglm.h>
 #include <stb_image.h>
+#include <stb_truetype.h>
 
 struct drawunit {
   apr_pool_t *pool;
@@ -137,8 +135,6 @@ static int LoadShader(apr_file_t *err, const char *vertex_source_path,
 
   apr_file_close(vsrc_handle);
 
-  // SDL_LoadFile(vertex_source_path, &vertex_source_size);
-
   apr_file_open(&fsrc_handle, fragment_source_path, APR_FOPEN_READ,
                 APR_FPROT_OS_DEFAULT, temp);
 
@@ -150,11 +146,9 @@ static int LoadShader(apr_file_t *err, const char *vertex_source_path,
   const char *fsrc = fragment_source;
 
   apr_file_close(fsrc_handle);
-  // SDL_LoadFile(fragment_source_path, &fragment_source_size);
 
   bool error = false;
 
-  // vertexsource = VertexSource; fragmentsource = FragmentSource;
   if (vertex_source_size == 0 || fragment_source_size == 0) {
     apr_file_printf(err, "Tried compiling an empty shader");
     return -1;
@@ -256,20 +250,10 @@ bool EqRenderCmd(Clay_RenderCommand *old, Clay_RenderCommand *new) {
   return true;
 }
 
-Clay_Dimensions SDL_MeasureText(Clay_StringSlice text,
-                                Clay_TextElementConfig *config,
-                                void *userData) {
+Clay_Dimensions Clay_MeasureText(Clay_StringSlice text,
+                                 Clay_TextElementConfig *config,
+                                 void *userData) {
   qlayout_renderer_t *rend = userData;
-  /*
-  TTF_Font *font = rend->fonts[config->fontId];
-  int width, height;
-
-  TTF_SetFontSize(font, config->fontSize);
-  if (!TTF_GetStringSize(font, text.chars, text.length, &width, &height)) {
-    apr_file_printf(rend->err, "Failed to measure text: %s", SDL_GetError());
-  }
-  */
-
   float scale = stbtt_ScaleForPixelHeight(&rend->font, config->fontSize);
 
   int width = 0;
@@ -317,7 +301,7 @@ void ReinitClay(qlayout_renderer_t *rend) {
           .userData = rend,
       });
   Clay_SetCurrentContext(rend->clay_cxt);
-  Clay_SetMeasureTextFunction(SDL_MeasureText, rend);
+  Clay_SetMeasureTextFunction(Clay_MeasureText, rend);
   Clay_ResetMeasureTextCache();
 }
 
@@ -409,32 +393,6 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
 
   rend->shaders.text.ProgID = TextProgID;
 
-  /*
-  rend->textEngine = TTF_CreateSurfaceTextEngine();
-
-  rend->fonts = apr_pcalloc(rend->pool, sizeof(TTF_Font *));
-  if (!rend->fonts) {
-    apr_file_printf(rend->err,
-                    "Failed to allocate memory for the font array: %s",
-                    SDL_GetError());
-    return -1;
-  }
-
-  // SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // nearest (sharp)
-  if (!TTF_Init()) {
-    apr_file_printf(rend->err, "Failed TTF_Init\n");
-    return -1;
-  }
-
-  TTF_Font *font = TTF_OpenFont("assets/Roboto-Regular.ttf", 24);
-  if (!font) {
-    apr_file_printf(rend->err, "Failed to load font: %s", SDL_GetError());
-    return -1;
-  }
-
-  rend->fonts[0] = font;
-  */
-
   unsigned char *ttf_buffer = NULL;
   // Roboto-Regular.ttf
   FILE *f = fopen("assets/OpenSans-VariableFont_wdth,wght.ttf", "rb");
@@ -482,13 +440,11 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
 
     drawunit_t *old =
         apr_hash_get(rend->drawunits, &rcmd->id, sizeof(rcmd->id));
-    // HASH_FIND_INT(rend->drawunits, &rcmd->id, old);
     if (old) {
       if (!EqRenderCmd(&old->rcmd, rcmd)) {
         changed = true;
         // continue;
       }
-      // HASH_DEL(rend->drawunits, old);
     } else {
       apr_pool_t *pool;
       apr_pool_create(&pool, rend->pool);
@@ -535,9 +491,6 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
     } break;
     case CLAY_RENDER_COMMAND_TYPE_TEXT: {
       Clay_TextRenderData *config = &rcmd->renderData.text;
-      // TTF_Font *font = rend->fonts[config->fontId];
-      // TTF_SetFontSize(font, config->fontSize * rend->scale);
-      // TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
       float scale = stbtt_ScaleForPixelHeight(&rend->font, config->fontSize) *
                     rend->scale;
 
@@ -546,31 +499,6 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
 
       const char *text = config->stringContents.chars;
       uint8_t *bitmap = calloc(w * h, 1);
-
-      // int width, height;
-      // TTF_GetStringSize(font, config->stringContents.chars,
-      // config->stringContents.length, &width, &height);
-      // rect.width = width;
-      // rect.height = height;
-      // TTF_Text *text =
-      // TTF_CreateText(rend->textEngine, font, config->stringContents.chars,
-      // config->stringContents.length);
-      // TTF_SetTextColor(text, config->textColor.r, config->textColor.g,
-      // config->textColor.b, config->textColor.a);
-      // SDL_Surface *textImg =
-      // SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
-      // oldbg = (Clay_Color){255, 255, 255, 0}; // config->textColor;
-      // printf("oldgb %f %f %f\n", oldbg.r, oldbg.g, oldbg.b);
-      // SDL_ClearSurface(textImg, oldbg.r, oldbg.g, oldbg.b, 0.f);
-      // TTF_DrawSurfaceText(text, 0, 0, textImg);
-      // SDL_Surface *textImgBad = TTF_RenderText_Blended(
-      // font, config->stringContents.chars, config->stringContents.length,
-      // (SDL_Color){config->textColor.r, config->textColor.g,
-      // config->textColor.b, config->textColor.a});
-      // (SDL_Color){oldbg.r, oldbg.g, oldbg.b, oldbg.a});
-      // SDL_Surface *textImg =
-      // SDL_ConvertSurface(textImgBad, SDL_PIXELFORMAT_RGBA32);
-      // printf("Top left: %.8x\n", *(uint32_t *)textImg->pixels);
 
       int x = 0;
 
@@ -630,9 +558,6 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
       Clay_GLRenderText(rend, rect, (void *)pixels);
       free(pixels);
       free(bitmap);
-      // TTF_DestroyText(text);
-      // SDL_DestroySurface(textImg);
-      // SDL_DestroySurface(textImgBad);
     } break;
     case CLAY_RENDER_COMMAND_TYPE_BORDER: {
     } break;
