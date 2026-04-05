@@ -61,6 +61,7 @@ struct qwindow {
   float scale;
 
   qwindow_interface_t i;
+  bool doredraw, needs_redraw;
 
   bool cancel_this_frame;
   struct wl_callback *frame_cb;
@@ -465,6 +466,16 @@ static void request_frame(qwindow_t *win) {
   wl_callback_add_listener(win->frame_cb, &frame_listener, win);
 }
 
+void qwindow_redraw(qwindow_t *win) {
+  bool redraw = win->doredraw || win->needs_redraw;
+  win->needs_redraw = true;
+
+  if (redraw) {
+    if (win->i.redraw)
+      win->i.redraw(win->i.ud);
+  }
+}
+
 static apr_status_t qwindow_event(const apr_pollfd_t *pfd, void *ud) {
   qwindow_t *win = ud;
   win->cancel_this_frame = false;
@@ -476,9 +487,7 @@ static apr_status_t qwindow_event(const apr_pollfd_t *pfd, void *ud) {
     win->can_render = 0;
 
     request_frame(win);
-
-    if (win->i.redraw)
-      win->i.redraw(win->i.ud);
+    qwindow_redraw(win);
   }
 
   return APR_SUCCESS;
@@ -508,8 +517,20 @@ static int qwindow_pre(void *ud) {
  * ------ PUBLIC ------
  */
 
+void qwindow_queue_redraw(qwindow_t *win) {
+  if (win->needs_redraw) {
+    qwindow_redraw(win);
+  } else {
+    win->doredraw = true;
+  }
+}
+
 int qwindow_swap(qwindow_t *win) {
   eglSwapBuffers(win->egl_display, win->egl_surface);
+
+  win->needs_redraw = false;
+  win->doredraw = false;
+
   return 0;
 }
 
@@ -615,6 +636,7 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   qwindow_swap(win);
   eglSwapInterval(win->display, 1);
+  win->doredraw = true,
 
   assert(win->display);
   win->wayland_fd = wl_display_get_fd(win->display);

@@ -32,6 +32,7 @@ typedef struct qwindow qwindow_t;
 int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
                  qwindow_interface_t *ev);
 
+void qwindow_queue_redraw(qwindow_t *win);
 int qwindow_swap(qwindow_t *win);
 void qwindow_make_current(qwindow_t *win);
 

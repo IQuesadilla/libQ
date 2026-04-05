@@ -34,7 +34,6 @@ struct app {
   uint64_t last_report, frames;
   apr_file_t *err;
 
-  bool doredraw, dorelay, needs_redraw;
   qlayout_renderer_t *rend;
 
   char buffer[1024];
@@ -59,55 +58,28 @@ void redraw(void *ud) {
   app_t *app = ud;
   bool lmouse = app->mdown;
   char statusbar[256];
-  // qwindow_make_current(app->win);
 
-  bool relay = /*newevents > 0 ||*/ app->dorelay || app->needs_redraw;
-  bool redraw = app->doredraw || relay;
+  Clay_BeginLayout();
+  lua_clay_relay(app->lc, lmouse);
+  Clay_RenderCommandArray render_commands = Clay_EndLayout();
 
-  app->dorelay = false;
-  app->needs_redraw = true;
+  qwindow_set_drag(app->win, lua_clay_get_drag(app->lc));
 
-  Clay_RenderCommandArray render_commands = {0};
-  if (relay) {
-    // printf("relaying\n");
-    // render_commands = ClayVideoDemo_CreateLayout(app, lmouse);
+  if (qlayout_renderer_clay(app->rend, &render_commands)) {
+    qwindow_swap(app->win);
 
-    Clay_BeginLayout();
-    lua_clay_relay(app->lc, lmouse);
-    render_commands = Clay_EndLayout();
-    qwindow_set_drag(app->win, lua_clay_get_drag(app->lc));
-  }
+    app->frames++;
 
-  if (redraw) {
-    // uint64_t now = apr_time_now();
-    if (qlayout_renderer_clay(app->rend, &render_commands)) {
-      qwindow_swap(app->win);
-      // app->lastframe = now;
+    uint64_t t = apr_time_now();
+    uint64_t elapsed = t - app->last_report;
+    if (elapsed >= 5000000) {
+      uint64_t fps = (app->frames * 1000000) / elapsed;
 
-      app->doredraw = false;
-      app->needs_redraw = false;
+      apr_file_printf(app->err, "FPS: %lu\n", fps);
+
+      app->frames = 0;
+      app->last_report = t;
     }
-  }
-
-  app->frames++;
-
-  uint64_t t = apr_time_now();
-  uint64_t elapsed = t - app->last_report;
-  if (elapsed >= 5000000) {
-    uint64_t fps = (app->frames * 1000000) / elapsed;
-
-    apr_file_printf(app->err, "FPS: %lu\n", fps);
-
-    app->frames = 0;
-    app->last_report = t;
-  }
-}
-
-void try_redraw(app_t *app) {
-  if (app->needs_redraw) {
-    redraw(app);
-  } else {
-    app->dorelay = true;
   }
 }
 
@@ -119,7 +91,7 @@ void resize(void *ud, int width, int height, float scaling) {
 
   qlayout_renderer_resize(app->rend, width, height, scaling);
 
-  try_redraw(app);
+  qwindow_queue_redraw(app->win);
 }
 
 void mouse_move(void *ud, float x, float y) {
@@ -128,7 +100,8 @@ void mouse_move(void *ud, float x, float y) {
   app->mpos_y = y;
   Clay_SetPointerState((Clay_Vector2){.x = app->mpos_x, .y = app->mpos_y},
                        app->mdown);
-  try_redraw(app);
+
+  qwindow_queue_redraw(app->win);
 }
 
 void mouse_down(void *ud, int down) {
@@ -136,7 +109,8 @@ void mouse_down(void *ud, int down) {
   app->mdown = down;
   Clay_SetPointerState((Clay_Vector2){.x = app->mpos_x, .y = app->mpos_y},
                        app->mdown);
-  try_redraw(app);
+
+  qwindow_queue_redraw(app->win);
 }
 
 void key_down(void *ud, uint32_t keysym) {
@@ -168,7 +142,7 @@ void key_down(void *ud, uint32_t keysym) {
     break;
   }
 
-  try_redraw(app);
+  qwindow_queue_redraw(app->win);
 }
 
 struct ReaderState {
@@ -212,7 +186,7 @@ void download_handler(data_node_t *list, void *ud) {
     return;
   } else if (status == LUA_OK) {
     lc_get_refs(app->lc);
-    try_redraw(app);
+    qwindow_queue_redraw(app->win);
   } else {
     printf("Error loading app.lua: %s\n", lua_tostring(app->co, -1));
   }
@@ -239,8 +213,6 @@ int main(int argc, const char *const argv[]) {
       .width = 1920,
       .height = 1080,
       .err = err,
-      .dorelay = true,
-      .doredraw = true,
       .lastframe = apr_time_now(),
       .L = luaL_newstate(),
   };
