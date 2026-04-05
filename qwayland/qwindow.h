@@ -8,7 +8,7 @@
 #include "apr_events.h"
 
 typedef void (*redraw_fn_t)(void *ud); // dT in usec
-typedef void (*resize_fn_t)(void *ud, int width, int height);
+typedef void (*resize_fn_t)(void *ud, int width, int height, float scaling);
 typedef void (*mouse_move_fn_t)(void *ud, float x, float y);
 typedef void (*mouse_down_fn_t)(void *ud, int down);
 typedef void (*key_down_fn_t)(void *ud, uint32_t keysym);

@@ -50,6 +50,28 @@ static Clay_ElementId lc_buildid(lua_clay_t *lc, const char *name) {
   return CLAY_SID(id);
 }
 
+Clay_Color lc_getcolor(lua_State *L) {
+  Clay_Color color;
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "r");
+    color.r = luaL_optnumber(L, -1, 0);
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "g");
+    color.g = luaL_optnumber(L, -1, 0);
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "b");
+    color.b = luaL_optnumber(L, -1, 0);
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "a");
+    color.a = luaL_optnumber(L, -1, 255);
+    lua_pop(L, 1);
+  }
+  return color;
+}
+
 static int l_window_item(lua_State *L) {
   lua_clay_t *lc = lua_touserdata(L, lua_upvalueindex(1));
 
@@ -159,23 +181,7 @@ static int l_window_item(lua_State *L) {
   lua_pop(L, 1);
 
   lua_getfield(L, 1, "backgroundColor");
-  if (lua_istable(L, -1)) {
-    lua_getfield(L, -1, "r");
-    el.backgroundColor.r = luaL_optnumber(L, -1, 0);
-    lua_pop(L, 1);
-
-    lua_getfield(L, -1, "g");
-    el.backgroundColor.g = luaL_optnumber(L, -1, 0);
-    lua_pop(L, 1);
-
-    lua_getfield(L, -1, "b");
-    el.backgroundColor.b = luaL_optnumber(L, -1, 0);
-    lua_pop(L, 1);
-
-    lua_getfield(L, -1, "a");
-    el.backgroundColor.a = luaL_optnumber(L, -1, 255);
-    lua_pop(L, 1);
-  }
+  el.backgroundColor = lc_getcolor(L);
   lua_pop(L, 1);
 
   lua_getfield(L, -1, "image");
@@ -273,20 +279,32 @@ static int l_window_is_hovered(lua_State *L) {
 }
 
 static int l_window_text(lua_State *L) {
+  lua_clay_t *lc = lua_touserdata(L, lua_upvalueindex(1));
   // Check that the first argument is an integer
-  const char *text = luaL_checkstring(L, 1);
+  // const char *text = luaL_checkstring(L, 1);
 
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_getfield(L, 1, "text");
+  const char *text = apr_pstrdup(lc->rpool, luaL_optstring(L, -1, NULL));
   Clay_String claytext = {
       .chars = text,
       .length = strlen(text),
       .isStaticallyAllocated = false,
   };
+  lua_pop(L, 1);
 
-  CLAY_TEXT(claytext, CLAY_TEXT_CONFIG({
-                          .fontId = 0,
-                          .fontSize = 16,
-                          .textColor = {255, 255, 255, 255},
-                      }));
+  Clay_TextElementConfig claytextcfg = {0};
+  claytextcfg.fontId = 0;
+
+  lua_getfield(L, 1, "fontSize");
+  claytextcfg.fontSize = luaL_optinteger(L, -1, 12);
+  lua_pop(L, 1);
+
+  lua_getfield(L, 1, "textColor");
+  claytextcfg.textColor = lc_getcolor(L);
+  lua_pop(L, 1);
+
+  CLAY_TEXT(claytext, CLAY_TEXT_CONFIG(claytextcfg));
 
   // The table is already on top of the stack, return 1 result
   return 0;

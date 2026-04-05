@@ -61,24 +61,23 @@ void redraw(void *ud) {
   char statusbar[256];
   // qwindow_make_current(app->win);
 
-  bool redraw = app->doredraw;
   bool relay = /*newevents > 0 ||*/ app->dorelay || app->needs_redraw;
+  bool redraw = app->doredraw || relay;
+
+  app->dorelay = false;
+  app->needs_redraw = true;
 
   Clay_RenderCommandArray render_commands = {0};
   if (relay) {
     // printf("relaying\n");
     // render_commands = ClayVideoDemo_CreateLayout(app, lmouse);
-    redraw = true;
 
     Clay_BeginLayout();
     lua_clay_relay(app->lc, lmouse);
     render_commands = Clay_EndLayout();
     qwindow_set_drag(app->win, lua_clay_get_drag(app->lc));
-
-    app->dorelay = false;
   }
 
-  app->needs_redraw = true;
   if (redraw) {
     // uint64_t now = apr_time_now();
     if (qlayout_renderer_clay(app->rend, &render_commands)) {
@@ -112,14 +111,13 @@ void try_redraw(app_t *app) {
   }
 }
 
-void resize(void *ud, int width, int height) {
+void resize(void *ud, int width, int height, float scaling) {
   app_t *app = ud;
   app->width = width;
   app->height = height;
   app->aspect_ratio = qcam_set_view(&app->cam, width, height);
 
-  Clay_SetLayoutDimensions((Clay_Dimensions){.width = width, .height = height});
-  qlayout_renderer_resize(app->rend, width, height);
+  qlayout_renderer_resize(app->rend, width, height, scaling);
 
   try_redraw(app);
 }
@@ -192,6 +190,12 @@ const char *reader(lua_State *L, void *data, size_t *size) {
   return ptr;
 }
 
+struct download {
+  const char *url;
+  app_t *app;
+};
+typedef struct download download_t;
+
 void download_handler(data_node_t *list, void *ud) {
   app_t *app = ud;
 
@@ -232,8 +236,8 @@ int main(int argc, const char *const argv[]) {
   apr_event_setup(&loop, pool);
 
   app_t app = {
-      .width = 640,
-      .height = 480,
+      .width = 1920,
+      .height = 1080,
       .err = err,
       .dorelay = true,
       .doredraw = true,
@@ -257,8 +261,9 @@ int main(int argc, const char *const argv[]) {
 
   app.co = lua_newthread(app.L);
 
-  const char *url = apr_pstrcat(pool, "http://", argv[1], "/app.lua", NULL);
-  start_download(url, pool, loop, download_handler, &app);
+  download_t *app_lua = apr_pcalloc(pool, sizeof(*app_lua));
+  app_lua->url = apr_pstrcat(pool, "http://", argv[1], "/app.lua", NULL);
+  start_download(app_lua->url, pool, loop, download_handler, &app);
 
   qwindow_interface_t interface = {
       .width = app.width,

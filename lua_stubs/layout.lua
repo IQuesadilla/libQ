@@ -45,6 +45,11 @@
 ---@field image nil|string
 ---@field drawchildren nil|fun(id:string):nil
 
+---@class Text
+---@field text string
+---@field fontSize integer
+---@field textColor Color
+
 ---@class window
 window = {}
 
@@ -74,7 +79,7 @@ function window.is_hovered(name) end
 ---@param lay Item
 function window.item(lay) end
 
----@param text string
+---@param text Text
 function window.text(text) end
 
 ---@param rc integer

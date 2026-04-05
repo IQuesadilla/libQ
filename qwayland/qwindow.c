@@ -1,6 +1,9 @@
 #include "qwindow.h"
 
+#include "fractional-scale-v1-client-protocol.h"
+#include "viewporter-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <linux/input-event-codes.h>
@@ -13,6 +16,7 @@
 #include <apr_file_io.h>
 #include <apr_portable.h>
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -32,6 +36,10 @@ struct qwindow {
   struct wl_surface *cursor_surface;
   struct wl_cursor_theme *cursor_theme;
 
+  struct wp_fractional_scale_manager_v1 *frac_manager;
+  struct wp_viewporter *viewporter;
+  struct wp_viewport *viewport;
+
   struct xdg_wm_base *wm_base;
   struct xdg_surface *xdg_surface;
   struct xdg_toplevel *toplevel;
@@ -49,13 +57,16 @@ struct qwindow {
   apr_file_t *wayland_file;
   apr_pool_t *pool;
 
+  // float logical_width, logical_height;
+  float scale;
+
   qwindow_interface_t i;
 
   bool cancel_this_frame;
   struct wl_callback *frame_cb;
   int can_render;
 
-  bool configured;
+  bool configured, done;
   bool should_drag;
 };
 
@@ -95,10 +106,10 @@ static void pointer_motion(void *data, struct wl_pointer *pointer,
   qwindow_t *win = data;
   // printf("Motion %.1f %.1f\n", wl_fixed_to_double(sx),
   // wl_fixed_to_double(sy));
-  float x = wl_fixed_to_double(sx);
-  float y = wl_fixed_to_double(sy);
+  float x = wl_fixed_to_double(sx); // * win->scale;
+  float y = wl_fixed_to_double(sy); // * win->scale;
 
-  win->should_drag = (y < 40.f);
+  // win->should_drag = (y < 40.f);
 
   if (win->i.mouse_move)
     win->i.mouse_move(win->i.ud, x, y);
@@ -248,6 +259,35 @@ static const struct xdg_surface_listener xdg_surface_listener = {
     .configure = xdg_surface_configure,
 };
 
+void update_surface_sizing(qwindow_t *win) {
+  if (!win->egl_window) {
+    // The scale event arrived before we finished setting up EGL.
+    // Just store the scale and return; the initial render will use it.
+    return;
+  }
+
+  // 1. Calculate physical pixels (e.g., 800 * 1.5 = 1200)
+  int phys_width = round((float)win->i.width * win->scale);
+  int phys_height = round((float)win->i.height * win->scale);
+
+  // 2. Resize the EGL window to the physical resolution.
+  // This tells OpenGL to create a framebuffer of 1200x900.
+  wl_egl_window_resize(win->egl_window, phys_width, phys_height, 0, 0);
+
+  // 3. CRITICAL: Set the buffer scale to 1.
+  // Because we are using a viewport to handle the fractional mapping,
+  // we must tell the compositor our buffer has a base scale of 1.
+  wl_surface_set_buffer_scale(win->surface, 1);
+
+  // 4. Map the physical buffer to the logical window size.
+  // This tells the compositor: "Take my 1200x900 buffer and display
+  // it perfectly inside my 800x600 logical window area."
+  wp_viewport_set_destination(win->viewport, win->i.width, win->i.height);
+
+  if (win->i.resize)
+    win->i.resize(win->i.ud, win->i.width, win->i.height, win->scale);
+}
+
 static void toplevel_configure(void *data, struct xdg_toplevel *toplevel,
                                int32_t width, int32_t height,
                                struct wl_array *states) {
@@ -257,10 +297,8 @@ static void toplevel_configure(void *data, struct xdg_toplevel *toplevel,
   if (width > 0 && height > 0) {
     win->i.width = width;
     win->i.height = height;
-    wl_egl_window_resize(win->egl_window, width, height, 0, 0);
-
-    if (win->i.resize)
-      win->i.resize(win->i.ud, width, height);
+    // wl_egl_window_resize(win->egl_window, width, height, 0, 0);
+    update_surface_sizing(win);
   }
 }
 
@@ -281,6 +319,78 @@ static const struct xdg_toplevel_listener toplevel_listener = {
     .configure_bounds = toplevel_configure_bounds,
 };
 
+static void handle_fractional_scale(void *data,
+                                    struct wp_fractional_scale_v1 *frac_scale,
+                                    uint32_t scale_120ths) {
+  qwindow_t *win = data;
+
+  // Convert 180 -> 1.5
+  win->scale = (double)scale_120ths / 120.0;
+  printf("Output fractional scale: %f\n", win->scale);
+
+  // Trigger a resize/update based on the new scale
+  update_surface_sizing(win);
+}
+
+void output_geometry(void *data, struct wl_output *wl_output, int32_t x,
+                     int32_t y, int32_t physical_width, int32_t physical_height,
+                     int32_t subpixel, const char *make, const char *model,
+                     int32_t transform) {
+  // qwindow_t *win = data;
+  // win->done = true;
+  // printf("Output geometry: %d\n", scale);
+}
+
+void output_mode(void *data, struct wl_output *wl_output, uint32_t flags,
+                 int32_t width, int32_t height, int32_t refresh) {
+  // qwindow_t *win = data;
+  // win->done = true;
+}
+
+void output_done(void *data, struct wl_output *wl_output) {
+  qwindow_t *win = data;
+  win->done = true;
+}
+
+void output_scale(void *data, struct wl_output *wl_output, int32_t scale) {
+  qwindow_t *win = data;
+  // int *surface_scale = data;
+  // *surface_scale = scale; // usually 1, 2, etc.
+  printf("Output scale: %d\n", scale);
+  win->scale = scale;
+  // wl_surface_set_buffer_scale(win->surface, 1);
+  update_surface_sizing(win);
+}
+
+static const struct wl_output_listener wl_output_listener = {
+    .geometry = output_geometry,
+    .mode = output_mode,
+    .done = output_done,
+    .scale = output_scale,
+};
+
+static const struct wp_fractional_scale_v1_listener frac_scale_listener = {
+    .preferred_scale =
+        handle_fractional_scale // This is the function from the previous step
+};
+
+void setup_surface_scaling(qwindow_t *win) {
+  // 1. Create a viewport for this surface (required for fractional scaling)
+  printf("surface %p\n", win->surface);
+  win->viewport = wp_viewporter_get_viewport(win->viewporter, win->surface);
+
+  // 2. Create the fractional scale object for this surface
+  struct wp_fractional_scale_v1 *frac_scale_obj =
+      wp_fractional_scale_manager_v1_get_fractional_scale(win->frac_manager,
+                                                          win->surface);
+
+  // 3. Register the listener
+  // This tells Wayland: "Whenever the scale for THIS surface changes, call my
+  // function"
+  wp_fractional_scale_v1_add_listener(frac_scale_obj, &frac_scale_listener,
+                                      win);
+}
+
 static void registry_global(void *data, struct wl_registry *registry,
                             uint32_t name, const char *interface,
                             uint32_t version) {
@@ -289,14 +399,34 @@ static void registry_global(void *data, struct wl_registry *registry,
   if (strcmp(interface, wl_compositor_interface.name) == 0) {
     win->compositor =
         wl_registry_bind(registry, name, &wl_compositor_interface, 4);
+
   } else if (strcmp(interface, wl_shm_interface.name) == 0) {
     win->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
+
   } else if (!strcmp(interface, wl_seat_interface.name)) {
     win->seat = wl_registry_bind(registry, name, &wl_seat_interface, 1);
 
     wl_seat_add_listener(win->seat, &seat_listener, win);
 
     win->xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+
+  } else if (strcmp(interface, wl_output_interface.name) == 0) {
+    struct wl_output *output =
+        wl_registry_bind(registry, name, &wl_output_interface, 2);
+    wl_output_add_listener(output, &wl_output_listener, win);
+
+  } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) ==
+             0) {
+    win->frac_manager = wl_registry_bind(
+        registry, name, &wp_fractional_scale_manager_v1_interface, 1);
+    // wp_fractional_scale_v1_add_listener(win->frac_manager,
+    // &frac_scale_listener, win);
+
+  } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+    win->viewporter =
+        wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
+    printf("Viewporter found! %p\n", win->viewporter);
+
   } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
     win->wm_base = wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
     xdg_wm_base_add_listener(win->wm_base, &wm_base_listener, win);
@@ -404,6 +534,8 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
       8,
       EGL_BLUE_SIZE,
       8,
+      EGL_ALPHA_SIZE,
+      8,
       EGL_DEPTH_SIZE,
       24,
       EGL_RENDERABLE_TYPE,
@@ -432,7 +564,14 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
   wl_registry_add_listener(win->registry, &registry_listener, win);
   wl_display_roundtrip(win->display);
 
+  if (win->viewporter == NULL) {
+    fprintf(stderr, "Compositor doesn't support viewporter!\n");
+    exit(1);
+  }
+
   win->surface = wl_compositor_create_surface(win->compositor);
+
+  setup_surface_scaling(win);
 
   win->cursor_theme = wl_cursor_theme_load(NULL, 24, win->shm);
 
@@ -445,9 +584,11 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
   xdg_toplevel_add_listener(win->toplevel, &toplevel_listener, win);
   xdg_toplevel_set_title(win->toplevel, "qwindow");
 
+  printf("setting to 1\n");
+
   wl_surface_commit(win->surface);
 
-  while (!win->configured)
+  while (!win->configured || !win->done)
     wl_display_dispatch(win->display);
 
   win->egl_display = eglGetDisplay((EGLNativeDisplayType)win->display);
@@ -475,6 +616,7 @@ int qwindow_init(qwindow_t **newwin, apr_pool_t *parent,
   qwindow_swap(win);
   eglSwapInterval(win->display, 1);
 
+  assert(win->display);
   win->wayland_fd = wl_display_get_fd(win->display);
   apr_os_file_put(&win->wayland_file, &win->wayland_fd, APR_FILE_NOCLEANUP,
                   win->pool);

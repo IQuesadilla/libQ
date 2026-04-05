@@ -19,6 +19,6 @@ void main() {
     if (dist > cornerRadius)
         a = clamp(1.0 + cornerRadius - dist, 0.0, 1.0);
 
-    gl_FragColor.rgb = (fragColor / 256.0).rgb;
-    gl_FragColor.a = a;
+    gl_FragColor.rgb = fragColor.rgb / 256.0;
+    gl_FragColor.a = a * (fragColor.a / 256.0);
 }

@@ -34,7 +34,7 @@ struct qlayout_renderer {
       GLint inPositionLoc, inRectLoc, screenLoc, textImgLoc;
     } text;
   } shaders;
-  float w, h;
+  float w, h, scale;
   int32_t prevcmdlen;
   // drawunit_t *drawunits;
   apr_hash_t *drawunits, *imgcache;
@@ -199,8 +199,8 @@ void Clay_GLRenderText(qlayout_renderer_t *rend, const Clay_BoundingBox rect,
   glActiveTexture(GL_TEXTURE0 + 0);
   glBindTexture(GL_TEXTURE_2D, tex);
 
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -308,8 +308,8 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
   rend->drawunits = apr_hash_make(rend->pool);
   rend->imgcache = apr_hash_make(rend->pool);
   rend->prevcmdlen = 0;
-  rend->w = 640;
-  rend->h = 480;
+  rend->w = 1920;
+  rend->h = 1080;
   rend->err = err;
   rend->loop = loop;
 
@@ -368,11 +368,13 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
     return -1;
   }
 
+  // SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // nearest (sharp)
   if (!TTF_Init()) {
     apr_file_printf(rend->err, "Failed TTF_Init\n");
     return -1;
   }
 
+  // OpenSans-VariableFont_wdth,wght.ttf
   TTF_Font *font = TTF_OpenFont("assets/Roboto-Regular.ttf", 24);
   if (!font) {
     apr_file_printf(rend->err, "Failed to load font: %s", SDL_GetError());
@@ -436,46 +438,67 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
     return false;
   }
 
+  Clay_Color oldbg = {0};
   rend->prevcmdlen = rcommands->length;
-  glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+  glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
   for (size_t i = 0; i < rcommands->length; i++) {
     Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
-    const Clay_BoundingBox rect = rcmd->boundingBox;
+    Clay_BoundingBox rect = {
+        .x = rcmd->boundingBox.x * rend->scale,
+        .y = rcmd->boundingBox.y * rend->scale,
+        .width = rcmd->boundingBox.width * rend->scale,
+        .height = rcmd->boundingBox.height * rend->scale,
+    };
 
     switch (rcmd->commandType) {
     case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
       Clay_RectangleRenderData *config = &rcmd->renderData.rectangle;
       if (config->cornerRadius.topLeft > 0) {
-        Clay_GLRenderFillRoundedRect(rend, rect, config->cornerRadius.topLeft,
+        Clay_GLRenderFillRoundedRect(rend, rect,
+                                     config->cornerRadius.topLeft * rend->scale,
                                      config->backgroundColor);
       } else {
         Clay_GLRenderFillRoundedRect(rend, rect, 0.f, config->backgroundColor);
       }
+      oldbg = config->backgroundColor;
     } break;
     case CLAY_RENDER_COMMAND_TYPE_TEXT: {
       Clay_TextRenderData *config = &rcmd->renderData.text;
       TTF_Font *font = rend->fonts[config->fontId];
-      TTF_SetFontSize(font, config->fontSize);
+      TTF_SetFontSize(font, config->fontSize * rend->scale);
+      TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
       int width, height;
       TTF_GetStringSize(font, config->stringContents.chars,
                         config->stringContents.length, &width, &height);
-      TTF_Text *text =
-          TTF_CreateText(rend->textEngine, font, config->stringContents.chars,
-                         config->stringContents.length);
-      TTF_SetTextColor(text, config->textColor.r, config->textColor.g,
-                       config->textColor.b, config->textColor.a);
+      rect.width = width;
+      rect.height = height;
+      // TTF_Text *text =
+      // TTF_CreateText(rend->textEngine, font, config->stringContents.chars,
+      // config->stringContents.length);
+      // TTF_SetTextColor(text, config->textColor.r, config->textColor.g,
+      // config->textColor.b, config->textColor.a);
+      // SDL_Surface *textImg =
+      // SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
+      // oldbg = (Clay_Color){255, 255, 255, 0}; // config->textColor;
+      // printf("oldgb %f %f %f\n", oldbg.r, oldbg.g, oldbg.b);
+      // SDL_ClearSurface(textImg, oldbg.r, oldbg.g, oldbg.b, 0.f);
+      // TTF_DrawSurfaceText(text, 0, 0, textImg);
+      SDL_Surface *textImgBad = TTF_RenderText_Blended(
+          font, config->stringContents.chars, config->stringContents.length,
+          (SDL_Color){config->textColor.r, config->textColor.g,
+                      config->textColor.b, config->textColor.a});
+      // (SDL_Color){oldbg.r, oldbg.g, oldbg.b, oldbg.a});
       SDL_Surface *textImg =
-          SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
-      SDL_ClearSurface(textImg, 255.f / 2.f, 255.f / 2.f, 255.f / 2.f, 0.f);
-      TTF_DrawSurfaceText(text, 0, 0, textImg);
+          SDL_ConvertSurface(textImgBad, SDL_PIXELFORMAT_RGBA32);
       // printf("Top left: %.8x\n", *(uint32_t *)textImg->pixels);
       Clay_GLRenderText(rend, rect, textImg);
-      TTF_DestroyText(text);
+      // TTF_DestroyText(text);
       SDL_DestroySurface(textImg);
+      SDL_DestroySurface(textImgBad);
     } break;
     case CLAY_RENDER_COMMAND_TYPE_BORDER: {
     } break;
@@ -510,8 +533,9 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
                         GL_LINEAR_MIPMAP_LINEAR);
         // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
+        // GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D,
+        // GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
         GLuint format, iformat;
         if (nchannels == 4) {
@@ -558,8 +582,15 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
   return true;
 }
 
-void qlayout_renderer_resize(qlayout_renderer_t *rend, float w, float h) {
-  glViewport(0, 0, w, h);
-  rend->w = w;
-  rend->h = h;
+void qlayout_renderer_resize(qlayout_renderer_t *rend, float w, float h,
+                             float scaling) {
+  int phys_width = round(w * scaling);
+  int phys_height = round(h * scaling);
+
+  Clay_SetLayoutDimensions((Clay_Dimensions){.width = w, .height = h});
+
+  glViewport(0, 0, phys_width, phys_height);
+  rend->w = phys_width;
+  rend->h = phys_height;
+  rend->scale = scaling;
 }
