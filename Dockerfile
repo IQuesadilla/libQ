@@ -42,9 +42,6 @@ RUN dnf install -y \
 
 RUN pip3 install --user pynvim
 
-COPY deps/cglm.sh /opt/cglm.sh
-RUN sh -c "/opt/cglm.sh"
-
 # ---------- Create a non-root dev user ----------
 RUN useradd -m -s /usr/bin/zsh dev
 
