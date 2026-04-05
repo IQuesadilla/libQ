@@ -1,8 +1,9 @@
 mkdir -p deps
 cd deps/
 
-wget https://github.com/nicbarker/clay/releases/download/v0.14/clay.h clay.h
-wget https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image.h stb_image.h
+wget https://github.com/nicbarker/clay/releases/download/v0.14/clay.h
+wget https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image.h
+wget https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_truetype.h
 
 wget https://github.com/recp/cglm/archive/refs/tags/v0.9.6.zip
 unzip v0.9.6.zip

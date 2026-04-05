@@ -1,10 +1,12 @@
 #define CLAY_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
+#define STB_TRUETYPE_IMPLEMENTATION
 #include "qlayout_renderer.h"
 
 #include <GLES2/gl2.h>
+#include <stb_truetype.h>
 // #include <SDL3_image/SDL_image.h>
-#include <SDL3_ttf/SDL_ttf.h>
+// #include <SDL3_ttf/SDL_ttf.h>
 #include <apr.h>
 #include <apr_file_io.h>
 #include <apr_hash.h>
@@ -22,8 +24,9 @@ typedef struct drawunit drawunit_t;
 struct qlayout_renderer {
   // SDL_Renderer *renderer;
   Clay_Context *clay_cxt;
-  TTF_TextEngine *textEngine;
-  TTF_Font **fonts;
+  stbtt_fontinfo font;
+  // TTF_TextEngine *textEngine;
+  // TTF_Font **fonts;
   struct {
     struct {
       GLuint ProgID, VBO;
@@ -100,15 +103,15 @@ static bool checkCompileErrors(apr_file_t *err, GLuint shader, bool isprogram,
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
     if (!success) {
       glGetShaderInfoLog(shader, 1024, NULL, infoLog);
-      SDL_LogError(SDL_LOG_CATEGORY_ERROR,
-                   "SHADER_COMPILATION_ERROR of type: %s -> %s", type, infoLog);
+      apr_file_printf(err, "SHADER_COMPILATION_ERROR of type: %s -> %s", type,
+                      infoLog);
     }
   } else {
     glGetProgramiv(shader, GL_LINK_STATUS, &success);
     if (!success) {
       glGetProgramInfoLog(shader, 1024, NULL, infoLog);
-      SDL_LogError(SDL_LOG_CATEGORY_ERROR,
-                   "PROGRAM_LINKING_ERROR of type: %s -> %s", type, infoLog);
+      apr_file_printf(err, "PROGRAM_LINKING_ERROR of type: %s -> %s", type,
+                      infoLog);
     }
   }
   return !success;
@@ -120,24 +123,45 @@ static const float quadVerts[] = {
 
 static int LoadShader(apr_file_t *err, const char *vertex_source_path,
                       const char *fragment_source_path) {
-  size_t vertex_source_size;
-  const char *vertex_source =
-      SDL_LoadFile(vertex_source_path, &vertex_source_size);
+  apr_file_t *vsrc_handle, *fsrc_handle;
+  apr_pool_t *temp = apr_file_pool_get(err);
+  apr_file_open(&vsrc_handle, vertex_source_path, APR_FOPEN_READ,
+                APR_FPROT_OS_DEFAULT, temp);
 
-  size_t fragment_source_size;
-  const char *fragment_source =
-      SDL_LoadFile(fragment_source_path, &fragment_source_size);
+  char vertex_source[16384];
+  apr_size_t vertex_source_size = 0;
+  apr_file_read_full(vsrc_handle, vertex_source, sizeof(vertex_source),
+                     &vertex_source_size);
+  vertex_source[vertex_source_size] = '\0';
+  const char *vsrc = vertex_source;
+
+  apr_file_close(vsrc_handle);
+
+  // SDL_LoadFile(vertex_source_path, &vertex_source_size);
+
+  apr_file_open(&fsrc_handle, fragment_source_path, APR_FOPEN_READ,
+                APR_FPROT_OS_DEFAULT, temp);
+
+  apr_size_t fragment_source_size = 0;
+  char fragment_source[16384];
+  apr_file_read_full(fsrc_handle, fragment_source, sizeof(fragment_source),
+                     &fragment_source_size);
+  fragment_source[fragment_source_size] = '\0';
+  const char *fsrc = fragment_source;
+
+  apr_file_close(fsrc_handle);
+  // SDL_LoadFile(fragment_source_path, &fragment_source_size);
 
   bool error = false;
 
   // vertexsource = VertexSource; fragmentsource = FragmentSource;
   if (vertex_source_size == 0 || fragment_source_size == 0) {
-    SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Tried compiling an empty shader");
+    apr_file_printf(err, "Tried compiling an empty shader");
     return -1;
   }
 
   GLuint vshader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vshader, 1, &vertex_source, NULL);
+  glShaderSource(vshader, 1, &vsrc, NULL);
   glCompileShader(vshader);
   bool verror = checkCompileErrors(err, vshader, false, "VERTEX");
   if (verror)
@@ -145,7 +169,7 @@ static int LoadShader(apr_file_t *err, const char *vertex_source_path,
   error |= verror;
 
   GLuint fshader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fshader, 1, &fragment_source, NULL);
+  glShaderSource(fshader, 1, &fsrc, NULL);
   glCompileShader(fshader);
   bool ferror = checkCompileErrors(err, fshader, false, "FRAGMENT");
   if (ferror)
@@ -191,7 +215,7 @@ void Clay_GLRenderFillRoundedRect(qlayout_renderer_t *rend,
 }
 
 void Clay_GLRenderText(qlayout_renderer_t *rend, const Clay_BoundingBox rect,
-                       SDL_Surface *textImg) {
+                       uint8_t *textImg) {
   glUseProgram(rend->shaders.text.ProgID);
 
   GLuint tex = 0;
@@ -204,8 +228,8 @@ void Clay_GLRenderText(qlayout_renderer_t *rend, const Clay_BoundingBox rect,
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, textImg->w, textImg->h, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, textImg->pixels);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rect.width, rect.height, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, textImg);
 
   glEnableVertexAttribArray(rend->shaders.rect.inPositionLoc);
   glVertexAttribPointer(rend->shaders.rect.inPositionLoc, 2, GL_FLOAT, GL_FALSE,
@@ -236,6 +260,7 @@ Clay_Dimensions SDL_MeasureText(Clay_StringSlice text,
                                 Clay_TextElementConfig *config,
                                 void *userData) {
   qlayout_renderer_t *rend = userData;
+  /*
   TTF_Font *font = rend->fonts[config->fontId];
   int width, height;
 
@@ -243,6 +268,32 @@ Clay_Dimensions SDL_MeasureText(Clay_StringSlice text,
   if (!TTF_GetStringSize(font, text.chars, text.length, &width, &height)) {
     apr_file_printf(rend->err, "Failed to measure text: %s", SDL_GetError());
   }
+  */
+
+  float scale = stbtt_ScaleForPixelHeight(&rend->font, config->fontSize);
+
+  int width = 0;
+  int ascent, descent, lineGap;
+
+  stbtt_GetFontVMetrics(&rend->font, &ascent, &descent, &lineGap);
+
+  float baseline = ascent * scale;
+
+  for (int i = 0; text.chars[i]; i++) {
+    int advance, lsb;
+    stbtt_GetCodepointHMetrics(&rend->font, text.chars[i], &advance, &lsb);
+    width += (int)(advance * scale);
+
+    if (text.chars[i + 1]) {
+      width +=
+          (int)(scale * stbtt_GetCodepointKernAdvance(
+                            &rend->font, text.chars[i], text.chars[i + 1]));
+    }
+  }
+
+  int height = (int)((ascent - descent) * scale);
+
+  printf("width: %d, height: %d, scale: %f\n", width, height, scale);
 
   return (Clay_Dimensions){(float)width, (float)height};
 }
@@ -358,6 +409,7 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
 
   rend->shaders.text.ProgID = TextProgID;
 
+  /*
   rend->textEngine = TTF_CreateSurfaceTextEngine();
 
   rend->fonts = apr_pcalloc(rend->pool, sizeof(TTF_Font *));
@@ -374,7 +426,6 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
     return -1;
   }
 
-  // OpenSans-VariableFont_wdth,wght.ttf
   TTF_Font *font = TTF_OpenFont("assets/Roboto-Regular.ttf", 24);
   if (!font) {
     apr_file_printf(rend->err, "Failed to load font: %s", SDL_GetError());
@@ -382,6 +433,23 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
   }
 
   rend->fonts[0] = font;
+  */
+
+  unsigned char *ttf_buffer = NULL;
+  // Roboto-Regular.ttf
+  FILE *f = fopen("assets/OpenSans-VariableFont_wdth,wght.ttf", "rb");
+
+  fseek(f, 0, SEEK_END);
+  size_t size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  ttf_buffer = malloc(size);
+  fread(ttf_buffer, 1, size, f);
+  fclose(f);
+
+  stbtt_InitFont(&rend->font, ttf_buffer,
+                 stbtt_GetFontOffsetForIndex(ttf_buffer, 0));
+  // stbtt_SetVariations(&rend->font, axes, num_axes);
 
   ReinitClay(rend);
 
@@ -467,15 +535,23 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
     } break;
     case CLAY_RENDER_COMMAND_TYPE_TEXT: {
       Clay_TextRenderData *config = &rcmd->renderData.text;
-      TTF_Font *font = rend->fonts[config->fontId];
-      TTF_SetFontSize(font, config->fontSize * rend->scale);
-      TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
+      // TTF_Font *font = rend->fonts[config->fontId];
+      // TTF_SetFontSize(font, config->fontSize * rend->scale);
+      // TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
+      float scale = stbtt_ScaleForPixelHeight(&rend->font, config->fontSize) *
+                    rend->scale;
 
-      int width, height;
-      TTF_GetStringSize(font, config->stringContents.chars,
-                        config->stringContents.length, &width, &height);
-      rect.width = width;
-      rect.height = height;
+      int w = rect.width;
+      int h = rect.height;
+
+      const char *text = config->stringContents.chars;
+      uint8_t *bitmap = calloc(w * h, 1);
+
+      // int width, height;
+      // TTF_GetStringSize(font, config->stringContents.chars,
+      // config->stringContents.length, &width, &height);
+      // rect.width = width;
+      // rect.height = height;
       // TTF_Text *text =
       // TTF_CreateText(rend->textEngine, font, config->stringContents.chars,
       // config->stringContents.length);
@@ -487,18 +563,76 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
       // printf("oldgb %f %f %f\n", oldbg.r, oldbg.g, oldbg.b);
       // SDL_ClearSurface(textImg, oldbg.r, oldbg.g, oldbg.b, 0.f);
       // TTF_DrawSurfaceText(text, 0, 0, textImg);
-      SDL_Surface *textImgBad = TTF_RenderText_Blended(
-          font, config->stringContents.chars, config->stringContents.length,
-          (SDL_Color){config->textColor.r, config->textColor.g,
-                      config->textColor.b, config->textColor.a});
+      // SDL_Surface *textImgBad = TTF_RenderText_Blended(
+      // font, config->stringContents.chars, config->stringContents.length,
+      // (SDL_Color){config->textColor.r, config->textColor.g,
+      // config->textColor.b, config->textColor.a});
       // (SDL_Color){oldbg.r, oldbg.g, oldbg.b, oldbg.a});
-      SDL_Surface *textImg =
-          SDL_ConvertSurface(textImgBad, SDL_PIXELFORMAT_RGBA32);
+      // SDL_Surface *textImg =
+      // SDL_ConvertSurface(textImgBad, SDL_PIXELFORMAT_RGBA32);
       // printf("Top left: %.8x\n", *(uint32_t *)textImg->pixels);
-      Clay_GLRenderText(rend, rect, textImg);
+
+      int x = 0;
+
+      int ascent, descent, lineGap;
+
+      stbtt_GetFontVMetrics(&rend->font, &ascent, &descent, &lineGap);
+
+      float baseline = ascent * scale;
+
+      for (int i = 0; text[i]; i++) {
+        int advance, lsb;
+        stbtt_GetCodepointHMetrics(&rend->font, text[i], &advance, &lsb);
+
+        int x0, y0, x1, y1;
+        stbtt_GetCodepointBitmapBox(&rend->font, text[i], scale, scale, &x0,
+                                    &y0, &x1, &y1);
+
+        int glyph_w = x1 - x0;
+        int glyph_h = y1 - y0;
+
+        unsigned char *glyph_bitmap = stbtt_GetCodepointBitmap(
+            &rend->font, 0, scale, text[i], &glyph_w, &glyph_h, 0, 0);
+
+        int y = (int)baseline + y0;
+
+        for (int gy = 0; gy < glyph_h; gy++) {
+          for (int gx = 0; gx < glyph_w; gx++) {
+            int dst_x = x + gx + x0;
+            int dst_y = y + gy;
+
+            if (dst_x >= 0 && dst_x < w && dst_y >= 0 && dst_y < h) {
+              bitmap[dst_y * w + dst_x] |= glyph_bitmap[gy * glyph_w + gx];
+            }
+          }
+        }
+
+        stbtt_FreeBitmap(glyph_bitmap, NULL);
+
+        x += (int)(advance * scale);
+
+        if (text[i + 1]) {
+          x += (int)(scale * stbtt_GetCodepointKernAdvance(&rend->font, text[i],
+                                                           text[i + 1]));
+        }
+      }
+
+      uint8_t *pixels = malloc(w * h * sizeof(uint32_t));
+
+      for (int i = 0; i < w * h; i++) {
+        float a = bitmap[i];
+        pixels[(i * 4) + 0] = config->textColor.r;
+        pixels[(i * 4) + 1] = config->textColor.g;
+        pixels[(i * 4) + 2] = config->textColor.b;
+        pixels[(i * 4) + 3] = (config->textColor.a * a) / 255;
+      }
+
+      Clay_GLRenderText(rend, rect, (void *)pixels);
+      free(pixels);
+      free(bitmap);
       // TTF_DestroyText(text);
-      SDL_DestroySurface(textImg);
-      SDL_DestroySurface(textImgBad);
+      // SDL_DestroySurface(textImg);
+      // SDL_DestroySurface(textImgBad);
     } break;
     case CLAY_RENDER_COMMAND_TYPE_BORDER: {
     } break;
@@ -576,7 +710,8 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
       break; // TODO: Run custom callback
     }
     default:
-      SDL_Log("Unknown render command type: %d", rcmd->commandType);
+      apr_file_printf(rend->err, "Unknown render command type: %d",
+                      rcmd->commandType);
     }
   }
   return true;
