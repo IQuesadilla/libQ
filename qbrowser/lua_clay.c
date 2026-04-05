@@ -192,14 +192,14 @@ static int l_window_item(lua_State *L) {
   const char *name = luaL_checkstring(L, -1);
   lua_pop(L, 1);
 
-  Clay_ElementId element_id = lc_buildid(lc, name);
+  el.id = lc_buildid(lc, name);
 
   lc->depth += 1;
 
   // --- get drawchildren ---
   lua_getfield(L, 1, "drawchildren");
 
-  CLAY(element_id, el) {
+  CLAY(el) {
     if (lua_isfunction(L, -1)) {
       // --- call drawchildren immediately (no args, 1 return) ---
       if (lua_pcall(L, 0, 0, 0) != LUA_OK) {

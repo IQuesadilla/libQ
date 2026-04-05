@@ -5,3 +5,4 @@ build/
 *.so
 subprojects/*
 !subprojects/*.wrap
+deps/
