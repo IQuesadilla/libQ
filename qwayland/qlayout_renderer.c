@@ -343,8 +343,8 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
   rend->drawunits = apr_hash_make(rend->pool);
   rend->imgcache = apr_hash_make(rend->pool);
   rend->prevcmdlen = 0;
-  rend->w = 1920;
-  rend->h = 1080;
+  rend->w = 700;
+  rend->h = 500;
   rend->err = err;
   rend->loop = loop;
 

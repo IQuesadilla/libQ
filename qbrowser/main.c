@@ -210,8 +210,8 @@ int main(int argc, const char *const argv[]) {
   apr_event_setup(&loop, pool);
 
   app_t app = {
-      .width = 1920,
-      .height = 1080,
+      .width = 700,
+      .height = 500,
       .err = err,
       .lastframe = apr_time_now(),
       .L = luaL_newstate(),
