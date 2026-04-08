@@ -38,11 +38,11 @@ struct qlayout_renderer {
   float w, h, scale;
   int32_t prevcmdlen;
   // drawunit_t *drawunits;
-  apr_hash_t *drawunits, *imgcache;
+  apr_hash_t *drawunits, *imgcache, *textcache;
   apr_pool_t *pool;
   apr_file_t *err;
   apr_loop_t *loop;
-  bool resize_font;
+  bool resize_font, force_redraw;
 };
 
 struct qlayout_image {
@@ -208,22 +208,78 @@ void Clay_GLRenderFillRoundedRect(qlayout_renderer_t *rend,
   return;
 }
 
-void Clay_GLRenderText(qlayout_renderer_t *rend, const Clay_BoundingBox rect,
-                       uint8_t *textImg) {
+static uint8_t *qlayout_draw_text(qlayout_renderer_t *rend,
+                                  const Clay_BoundingBox rect,
+                                  Clay_TextRenderData *config) {
+  float scale =
+      stbtt_ScaleForPixelHeight(&rend->font, config->fontSize) * rend->scale;
+
+  int w = rect.width;
+  int h = rect.height;
+
+  const char *text = config->stringContents.chars;
+  uint8_t *bitmap = calloc(w * h, 1);
+
+  int x = 0;
+
+  int ascent, descent, lineGap;
+
+  stbtt_GetFontVMetrics(&rend->font, &ascent, &descent, &lineGap);
+
+  float baseline = ascent * scale;
+
+  for (int i = 0; text[i]; i++) {
+    int advance, lsb;
+    stbtt_GetCodepointHMetrics(&rend->font, text[i], &advance, &lsb);
+
+    int x0, y0, x1, y1;
+    stbtt_GetCodepointBitmapBox(&rend->font, text[i], scale, scale, &x0, &y0,
+                                &x1, &y1);
+
+    int glyph_w = x1 - x0;
+    int glyph_h = y1 - y0;
+
+    unsigned char *glyph_bitmap = stbtt_GetCodepointBitmap(
+        &rend->font, 0, scale, text[i], &glyph_w, &glyph_h, 0, 0);
+
+    int y = (int)baseline + y0;
+
+    for (int gy = 0; gy < glyph_h; gy++) {
+      for (int gx = 0; gx < glyph_w; gx++) {
+        int dst_x = x + gx + x0;
+        int dst_y = y + gy;
+
+        if (dst_x >= 0 && dst_x < w && dst_y >= 0 && dst_y < h) {
+          bitmap[dst_y * w + dst_x] |= glyph_bitmap[gy * glyph_w + gx];
+        }
+      }
+    }
+
+    stbtt_FreeBitmap(glyph_bitmap, NULL);
+
+    x += (int)(advance * scale);
+
+    if (text[i + 1]) {
+      x += (int)(scale * stbtt_GetCodepointKernAdvance(&rend->font, text[i],
+                                                       text[i + 1]));
+    }
+  }
+
+  uint8_t *pixels = malloc(w * h * sizeof(uint32_t));
+
+  for (int i = 0; i < w * h; i++) {
+    float a = bitmap[i];
+    pixels[(i * 4) + 0] = config->textColor.r;
+    pixels[(i * 4) + 1] = config->textColor.g;
+    pixels[(i * 4) + 2] = config->textColor.b;
+    pixels[(i * 4) + 3] = (config->textColor.a * a) / 255.f;
+  }
+  free(bitmap);
+  return pixels;
+}
+
+void Clay_GLRenderText(qlayout_renderer_t *rend, const Clay_BoundingBox rect) {
   glUseProgram(rend->shaders.text.ProgID);
-
-  GLuint tex = 0;
-  glGenTextures(1, &tex);
-  glActiveTexture(GL_TEXTURE0 + 0);
-  glBindTexture(GL_TEXTURE_2D, tex);
-
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rect.width, rect.height, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, textImg);
 
   glEnableVertexAttribArray(rend->shaders.rect.inPositionLoc);
   glVertexAttribPointer(rend->shaders.rect.inPositionLoc, 2, GL_FLOAT, GL_FALSE,
@@ -238,8 +294,6 @@ void Clay_GLRenderText(qlayout_renderer_t *rend, const Clay_BoundingBox rect,
 
   // Draw texture
   glDrawArrays(GL_TRIANGLES, 0, 6);
-
-  glDeleteTextures(1, &tex);
 }
 
 bool EqRenderCmd(Clay_RenderCommand *old, Clay_RenderCommand *new) {
@@ -342,14 +396,12 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
   rend->pool = pool;
   rend->drawunits = apr_hash_make(rend->pool);
   rend->imgcache = apr_hash_make(rend->pool);
+  rend->textcache = apr_hash_make(rend->pool);
   rend->prevcmdlen = 0;
   rend->w = 700;
   rend->h = 500;
   rend->err = err;
   rend->loop = loop;
-
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
   // Shader RECT
   int RectProgID =
@@ -393,18 +445,22 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
 
   rend->shaders.text.ProgID = TextProgID;
 
-  unsigned char *ttf_buffer = NULL;
+  apr_file_t *font;
+  apr_file_open(&font, "assets/OpenSans-VariableFont_wdth,wght.ttf",
+                APR_FOPEN_READ | APR_FOPEN_BINARY, APR_FPROT_OS_DEFAULT,
+                rend->pool);
+
+  apr_finfo_t fontinfo = {0};
+  apr_file_info_get(&fontinfo, APR_FINFO_SIZE, font);
+
+  uint8_t ttf_buffer[fontinfo.size];
+  apr_file_read_full(font, ttf_buffer, fontinfo.size, NULL);
+  apr_file_close(font);
+
   // Roboto-Regular.ttf
-  FILE *f = fopen("assets/OpenSans-VariableFont_wdth,wght.ttf", "rb");
+  // FILE *f = fopen("assets/OpenSans-VariableFont_wdth,wght.ttf", "rb");
 
-  fseek(f, 0, SEEK_END);
-  size_t size = ftell(f);
-  fseek(f, 0, SEEK_SET);
-
-  ttf_buffer = malloc(size);
-  fread(ttf_buffer, 1, size, f);
-  fclose(f);
-
+  // int nfonts = stbtt_GetNumberOfFonts(ttf_buffer);
   stbtt_InitFont(&rend->font, ttf_buffer,
                  stbtt_GetFontOffsetForIndex(ttf_buffer, 0));
   // stbtt_SetVariations(&rend->font, axes, num_axes);
@@ -420,7 +476,7 @@ int qlayout_renderer_init(qlayout_renderer_t **newrend, apr_pool_t *parent,
 
 bool qlayout_renderer_clay(qlayout_renderer_t *rend,
                            Clay_RenderCommandArray *rcommands) {
-  bool changed = rcommands->length != rend->prevcmdlen;
+  bool changed = rcommands->length != rend->prevcmdlen || rend->force_redraw;
   // bool validScissor = false;
   // Clay_BoundingBox currentScissor = {0};
   for (size_t i = 0; i < rcommands->length; i++) {
@@ -465,9 +521,11 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
   Clay_Color oldbg = {0};
   rend->prevcmdlen = rcommands->length;
   glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glClear(GL_COLOR_BUFFER_BIT);
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_DST_ALPHA);
   for (size_t i = 0; i < rcommands->length; i++) {
     Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
     Clay_BoundingBox rect = {
@@ -491,73 +549,40 @@ bool qlayout_renderer_clay(qlayout_renderer_t *rend,
     } break;
     case CLAY_RENDER_COMMAND_TYPE_TEXT: {
       Clay_TextRenderData *config = &rcmd->renderData.text;
-      float scale = stbtt_ScaleForPixelHeight(&rend->font, config->fontSize) *
-                    rend->scale;
+      GLuint *texptr =
+          apr_hash_get(rend->textcache, rcmd->userData, APR_HASH_KEY_STRING);
+      if (!texptr) {
+        printf("new text %s %d %d\n", config->stringContents.chars,
+               config->stringContents.length, config->stringContents.chars[11]);
+        uint8_t *pixels = qlayout_draw_text(rend, rect, config);
 
-      int w = rect.width;
-      int h = rect.height;
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glActiveTexture(GL_TEXTURE0 + 0);
+        glBindTexture(GL_TEXTURE_2D, tex);
 
-      const char *text = config->stringContents.chars;
-      uint8_t *bitmap = calloc(w * h, 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-      int x = 0;
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rect.width, rect.height, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
-      int ascent, descent, lineGap;
+        free(pixels);
 
-      stbtt_GetFontVMetrics(&rend->font, &ascent, &descent, &lineGap);
-
-      float baseline = ascent * scale;
-
-      for (int i = 0; text[i]; i++) {
-        int advance, lsb;
-        stbtt_GetCodepointHMetrics(&rend->font, text[i], &advance, &lsb);
-
-        int x0, y0, x1, y1;
-        stbtt_GetCodepointBitmapBox(&rend->font, text[i], scale, scale, &x0,
-                                    &y0, &x1, &y1);
-
-        int glyph_w = x1 - x0;
-        int glyph_h = y1 - y0;
-
-        unsigned char *glyph_bitmap = stbtt_GetCodepointBitmap(
-            &rend->font, 0, scale, text[i], &glyph_w, &glyph_h, 0, 0);
-
-        int y = (int)baseline + y0;
-
-        for (int gy = 0; gy < glyph_h; gy++) {
-          for (int gx = 0; gx < glyph_w; gx++) {
-            int dst_x = x + gx + x0;
-            int dst_y = y + gy;
-
-            if (dst_x >= 0 && dst_x < w && dst_y >= 0 && dst_y < h) {
-              bitmap[dst_y * w + dst_x] |= glyph_bitmap[gy * glyph_w + gx];
-            }
-          }
-        }
-
-        stbtt_FreeBitmap(glyph_bitmap, NULL);
-
-        x += (int)(advance * scale);
-
-        if (text[i + 1]) {
-          x += (int)(scale * stbtt_GetCodepointKernAdvance(&rend->font, text[i],
-                                                           text[i + 1]));
-        }
+        texptr = apr_palloc(rend->pool, sizeof(tex));
+        *texptr = tex;
+        apr_hash_set(rend->textcache, apr_pstrdup(rend->pool, rcmd->userData),
+                     APR_HASH_KEY_STRING, texptr);
+      } else {
+        glActiveTexture(GL_TEXTURE0 + 0);
+        glBindTexture(GL_TEXTURE_2D, *texptr);
       }
 
-      uint8_t *pixels = malloc(w * h * sizeof(uint32_t));
+      Clay_GLRenderText(rend, rect);
 
-      for (int i = 0; i < w * h; i++) {
-        float a = bitmap[i];
-        pixels[(i * 4) + 0] = config->textColor.r;
-        pixels[(i * 4) + 1] = config->textColor.g;
-        pixels[(i * 4) + 2] = config->textColor.b;
-        pixels[(i * 4) + 3] = (config->textColor.a * a) / 255;
-      }
-
-      Clay_GLRenderText(rend, rect, (void *)pixels);
-      free(pixels);
-      free(bitmap);
+      // glDeleteTextures(1, &tex);
     } break;
     case CLAY_RENDER_COMMAND_TYPE_BORDER: {
     } break;
@@ -648,9 +673,11 @@ void qlayout_renderer_resize(qlayout_renderer_t *rend, float w, float h,
   int phys_height = round(h * scaling);
 
   Clay_SetLayoutDimensions((Clay_Dimensions){.width = w, .height = h});
+  apr_hash_clear(rend->textcache);
 
   glViewport(0, 0, phys_width, phys_height);
   rend->w = phys_width;
   rend->h = phys_height;
   rend->scale = scaling;
+  rend->force_redraw = true;
 }

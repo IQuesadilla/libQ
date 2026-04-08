@@ -45,9 +45,6 @@ struct app {
 typedef struct app app_t;
 
 static void init_egl(struct app *app) {
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
   qcam_init_default(&app->cam);
   app->cam.MovementSpeed = 0.01f;
   app->cam.BinarySensitivity = 4.f;
@@ -88,6 +85,7 @@ void resize(void *ud, int width, int height, float scaling) {
   app->width = width;
   app->height = height;
   app->aspect_ratio = qcam_set_view(&app->cam, width, height);
+  printf("resize\n");
 
   qlayout_renderer_resize(app->rend, width, height, scaling);
 
@@ -192,6 +190,16 @@ void download_handler(data_node_t *list, void *ud) {
   }
 }
 
+static void *l_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
+  (void)ud;
+  (void)osize; /* not used */
+  if (nsize == 0) {
+    free(ptr);
+    return NULL;
+  } else
+    return realloc(ptr, nsize);
+}
+
 int main(int argc, const char *const argv[]) {
   apr_app_initialize(&argc, &argv, NULL);
 
@@ -214,7 +222,7 @@ int main(int argc, const char *const argv[]) {
       .height = 500,
       .err = err,
       .lastframe = apr_time_now(),
-      .L = luaL_newstate(),
+      .L = lua_newstate(l_alloc, NULL),
   };
 
   // luaL_openlibs(app.L);

@@ -18,7 +18,15 @@ local spacer = function(name)
   }
 end
 
-window.draw = function()
+--[[
+app.window {
+  title = "name",
+  draw = function(window)
+  end
+}
+]]
+
+window.draw = function(win)
   window.item {
     name = "root",
     layout = {

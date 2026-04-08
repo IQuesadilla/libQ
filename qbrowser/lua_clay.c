@@ -28,7 +28,7 @@ static int l_log(lua_State *L) {
   return 0;
 }
 
-static Clay_ElementId lc_buildid(lua_clay_t *lc, const char *name) {
+static Clay_String lc_buildid(lua_clay_t *lc, const char *name) {
   char **current_id = NULL;
   if (lc->depth >= lc->id_stack->nelts)
     current_id = &APR_ARRAY_PUSH(lc->id_stack, char *);
@@ -47,7 +47,7 @@ static Clay_ElementId lc_buildid(lua_clay_t *lc, const char *name) {
       .length = strlen(*current_id),
       .isStaticallyAllocated = false,
   };
-  return CLAY_SID(id);
+  return id;
 }
 
 Clay_Color lc_getcolor(lua_State *L) {
@@ -192,7 +192,7 @@ static int l_window_item(lua_State *L) {
   const char *name = luaL_checkstring(L, -1);
   lua_pop(L, 1);
 
-  el.id = lc_buildid(lc, name);
+  el.id = CLAY_SID(lc_buildid(lc, name));
 
   lc->depth += 1;
 
@@ -265,7 +265,7 @@ static int l_window_is_hovered(lua_State *L) {
   lua_clay_t *lc = lua_touserdata(L, lua_upvalueindex(1));
 
   const char *name = luaL_checkstring(L, 1);
-  Clay_ElementId element_id = lc_buildid(lc, name);
+  Clay_ElementId element_id = CLAY_SID(lc_buildid(lc, name));
   bool IsHovered = Clay_PointerOver(element_id);
 
   // lua_rawgeti(L, LUA_REGISTRYINDEX, lc->window_ref); // push window
@@ -303,6 +303,9 @@ static int l_window_text(lua_State *L) {
   lua_getfield(L, 1, "textColor");
   claytextcfg.textColor = lc_getcolor(L);
   lua_pop(L, 1);
+
+  Clay_String id = lc_buildid(lc, "textid");
+  claytextcfg.userData = (char *)id.chars;
 
   CLAY_TEXT(claytext, CLAY_TEXT_CONFIG(claytextcfg));
 
