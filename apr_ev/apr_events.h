@@ -1,5 +1,16 @@
+#ifndef APR_EVENTS_H
+#define APR_EVENTS_H
+
 #include <apr_poll.h>
 #include <apr_pools.h>
+
+#define CHUNK_SIZE 8192
+
+typedef struct data_node {
+  char data[CHUNK_SIZE];
+  apr_size_t used;
+  struct data_node *next;
+} data_node_t;
 
 typedef struct apr_loop apr_loop_t;
 typedef struct apr_event apr_event_t;
@@ -21,3 +32,5 @@ apr_prerun_t *apr_event_add_prerun(apr_loop_t *loop, apr_prerun_cb_t fn,
 void apr_event_remove_prerun(apr_prerun_t *prerun);
 
 void apr_event_run(apr_loop_t *loop);
+
+#endif

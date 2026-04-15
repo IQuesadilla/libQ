@@ -18,6 +18,7 @@ RUN dnf install -y \
     apr-devel \
     apr-util-devel \
     libserf-devel \
+    libssh-devel \
     lua \
     lua-libs \
     lua-devel \
@@ -32,6 +33,7 @@ RUN dnf install -y \
     SDL3-devel \
     SDL3_image-devel \
     SDL3_ttf-devel \
+    glfw-devel \
     ffmpeg-free-devel \
     wayland-devel \
     wayland-protocols-devel \

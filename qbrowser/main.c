@@ -1,7 +1,9 @@
 #include <apr.h>
 #include <apr_general.h>
+#include <apr_getopt.h>
 #include <apr_pools.h>
 #include <apr_strings.h>
+#include <apr_thread_proc.h>
 
 #include <cglm/cglm.h>
 
@@ -22,6 +24,8 @@
 struct app {
   qwindow_t *win;
   qcam_t cam;
+
+  apr_loop_t *loop;
 
   int width, height;
   float aspect_ratio;
@@ -143,22 +147,19 @@ void key_down(void *ud, uint32_t keysym) {
   qwindow_queue_redraw(app->win);
 }
 
-struct ReaderState {
-  data_node_t *cur;
-};
+const char *data_node_reader(lua_State *L, void *data, size_t *size) {
+  data_node_t **rs = data;
+  data_node_t *cur = *rs;
 
-const char *reader(lua_State *L, void *data, size_t *size) {
-  struct ReaderState *rs = data;
-
-  if (!rs->cur) {
+  if (!cur) {
     *size = 0;
     return NULL;
   }
 
-  const char *ptr = rs->cur->data;
-  *size = rs->cur->used;
+  const char *ptr = cur->data;
+  *size = cur->used;
 
-  rs->cur = rs->cur->next;
+  *rs = cur->next;
   return ptr;
 }
 
@@ -171,9 +172,7 @@ typedef struct download download_t;
 void download_handler(data_node_t *list, void *ud) {
   app_t *app = ud;
 
-  struct ReaderState rs = {.cur = list};
-
-  if (lua_load(app->co, reader, &rs, "stream", NULL) != LUA_OK) {
+  if (lua_load(app->co, data_node_reader, &list, "stream", NULL) != LUA_OK) {
     fprintf(stderr, "load error: %s\n", lua_tostring(app->co, -1));
     return;
   }
@@ -190,6 +189,102 @@ void download_handler(data_node_t *list, void *ud) {
   }
 }
 
+typedef struct {
+  apr_pool_t *pool;
+  const char *filename;
+  apr_file_t *pipe_write;
+  data_node_t *head, *tail;
+  apr_loop_t *loop;
+  downloader_fn_t on_complete;
+  void *ud;
+} file_reader_t;
+
+int file_reader_poll(const apr_pollfd_t *fd, void *ud) {
+  file_reader_t *fl = ud;
+
+  if (fl->tail->used >= CHUNK_SIZE) {
+    data_node_t *new_node = apr_palloc(fd->p, sizeof(data_node_t));
+    new_node->used = 0;
+    new_node->next = NULL;
+    fl->tail->next = new_node;
+    fl->tail = new_node;
+  }
+
+  apr_size_t size = CHUNK_SIZE - fl->tail->used;
+  apr_file_read(fd->desc.f, &fl->tail->data[fl->tail->used], &size);
+  fl->tail->used += size;
+
+  if (apr_file_eof(fd->desc.f)) {
+    fl->on_complete(fl->head, fl->ud);
+    apr_event_remove_pollfd(fl->loop, fd);
+  }
+  return 0;
+}
+
+static void *APR_THREAD_FUNC file_reader_thread(apr_thread_t *thd, void *data) {
+  file_reader_t *ctx = (file_reader_t *)data;
+
+  apr_file_t *file;
+  apr_status_t rv;
+
+  rv = apr_file_open(&file, ctx->filename, APR_READ, APR_OS_DEFAULT, ctx->pool);
+  if (rv != APR_SUCCESS) {
+    apr_file_close(ctx->pipe_write);
+    return NULL;
+  }
+
+  char buf[CHUNK_SIZE];
+  apr_size_t n;
+
+  while (1) {
+    n = sizeof(buf);
+    rv = apr_file_read(file, buf, &n);
+
+    if (rv == APR_EOF) {
+      break;
+    }
+
+    if (rv != APR_SUCCESS) {
+      break;
+    }
+
+    // write chunk into pipe
+    apr_size_t written = n;
+    apr_file_write(ctx->pipe_write, buf, &written);
+  }
+
+  apr_file_close(file);
+
+  // optional: close write end to signal EOF to reader
+  apr_file_close(ctx->pipe_write);
+
+  return NULL;
+}
+
+void file_reader_create(file_reader_t **newfl, const char *path,
+                        apr_loop_t *loop, apr_pool_t *pool,
+                        downloader_fn_t on_complete, void *ud) {
+  file_reader_t *fl = apr_pcalloc(pool, sizeof(*fl));
+  fl->on_complete = on_complete;
+  fl->ud = ud;
+  fl->head = fl->tail = apr_palloc(pool, sizeof(data_node_t));
+  fl->tail->used = 0;
+  fl->tail->next = NULL;
+  fl->pool = pool;
+  fl->loop = loop;
+  fl->filename = apr_pstrdup(pool, path);
+
+  apr_file_t *pipe_read;
+  apr_file_pipe_create(&pipe_read, &fl->pipe_write, pool);
+
+  apr_thread_t *t;
+  apr_thread_create(&t, NULL, file_reader_thread, fl, pool);
+
+  apr_event_add_file(loop, pipe_read, pool, APR_POLLIN, file_reader_poll, fl);
+
+  *newfl = fl;
+}
+
 static void *l_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
   (void)ud;
   (void)osize; /* not used */
@@ -200,30 +295,88 @@ static void *l_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     return realloc(ptr, nsize);
 }
 
+static const apr_getopt_option_t options[] = {
+    {"help", 'h', 0, "Display this help"},
+    {NULL, 'V', 0, "Display version and exit"},
+    {"file", 'f', 1, "<path> Load file from disk"},
+    {"url", 'u', 1, "<url> Load file from the web"},
+    {NULL, 0},
+};
+
+static void print_usage(apr_file_t *err) {
+  int i = 0;
+
+  apr_file_printf(err, "qbrowser [options]\n");
+  apr_file_printf(err, "Options:");
+
+  while (options[i].optch > 0) {
+    const apr_getopt_option_t *o = &options[i];
+
+    if (o->optch <= 255) {
+      apr_file_printf(err, " -%c", o->optch);
+      if (o->name)
+        apr_file_printf(err, ", ");
+    } else {
+      apr_file_printf(err, "     ");
+    }
+
+    apr_file_printf(err, "%s%s\t%s\n", o->name ? "--" : "\t",
+                    o->name ? o->name : "", o->description);
+
+    i++;
+  }
+}
+
 int main(int argc, const char *const argv[]) {
   apr_app_initialize(&argc, &argv, NULL);
 
-  if (argc != 2) {
-    fprintf(stderr, "Usage: %s url|ip:port\n", argv[0]);
-    return 0;
-  }
+  apr_status_t s = APR_SUCCESS;
 
   apr_pool_t *pool;
   apr_pool_create_core(&pool);
 
-  apr_file_t *err;
-  apr_file_open_stderr(&err, pool);
-
-  apr_loop_t *loop;
-  apr_event_setup(&loop, pool);
-
   app_t app = {
       .width = 700,
       .height = 500,
-      .err = err,
-      .lastframe = apr_time_now(),
-      .L = lua_newstate(l_alloc, NULL),
   };
+
+  apr_file_open_stderr(&app.err, pool);
+
+  apr_event_setup(&app.loop, pool);
+
+  bool loaded = false;
+  int opt_c;
+  const char *opt_arg;
+  apr_getopt_t *opt;
+  apr_getopt_init(&opt, pool, argc, argv);
+  while ((s = apr_getopt_long(opt, options, &opt_c, &opt_arg)) == APR_SUCCESS) {
+    switch (opt_c) {
+    case 'h':
+      print_usage(app.err);
+      exit(0);
+      break;
+    case 'f': {
+      file_reader_t *fl;
+      file_reader_create(&fl, opt_arg, app.loop, pool, download_handler, &app);
+
+      loaded = true;
+    } break;
+    case 'u': {
+      download_t *app_lua = apr_pcalloc(pool, sizeof(*app_lua));
+      app_lua->url = apr_pstrcat(pool, "http://", opt_arg, "/app.lua", NULL);
+      start_download(app_lua->url, pool, app.loop, download_handler, &app);
+      loaded = true;
+    } break;
+    }
+  }
+
+  if (!loaded) {
+    print_usage(app.err);
+    return 0;
+  }
+
+  app.lastframe = apr_time_now();
+  app.L = lua_newstate(l_alloc, NULL);
 
   // luaL_openlibs(app.L);
   luaopen_base(app.L); // TODO: Reimplement
@@ -241,15 +394,11 @@ int main(int argc, const char *const argv[]) {
 
   app.co = lua_newthread(app.L);
 
-  download_t *app_lua = apr_pcalloc(pool, sizeof(*app_lua));
-  app_lua->url = apr_pstrcat(pool, "http://", argv[1], "/app.lua", NULL);
-  start_download(app_lua->url, pool, loop, download_handler, &app);
-
   qwindow_interface_t interface = {
       .width = app.width,
       .height = app.height,
-      .err = err,
-      .loop = loop,
+      .err = app.err,
+      .loop = app.loop,
       .ud = &app,
       .redraw = redraw,
       .resize = resize,
@@ -261,12 +410,12 @@ int main(int argc, const char *const argv[]) {
   qwindow_init(&app.win, pool, &interface);
   init_egl(&app);
 
-  if (qlayout_renderer_init(&app.rend, pool, loop, app.err) < 0) {
+  if (qlayout_renderer_init(&app.rend, pool, app.loop, app.err) < 0) {
     apr_file_printf(app.err, "Failed Clay_GLRenderInit\n");
     exit(-1);
   }
 
-  apr_event_run(loop);
+  apr_event_run(app.loop);
 
   apr_terminate();
   return 0;
